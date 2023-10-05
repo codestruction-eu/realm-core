@@ -529,11 +529,49 @@ public:
         // additional flags can be supported by new layouts, but old layout (kind=='A') is full
     };
     template <Encoding>
-    inline void set_flags(uint64_t* header, uint8_t flags);
+    static inline void set_flags(uint64_t* header, uint8_t flags);
     template <Encoding>
-    inline uint8_t get_flags(uint64_t* header);
+    static inline uint8_t get_flags(uint64_t* header);
 };
 
+#define dispatch_on_enc(enc, func, args...)                                                                          \
+    if (enc == NodeHeader::Encoding::AofP)                                                                           \
+        func<NodeHeader::Encoding::AofP>(args);                                                                      \
+    else if (enc == NodeHeader::Encoding::PofA)                                                                      \
+        func<NodeHeader::Encoding::PofA>(args);                                                                      \
+    else if (enc == NodeHeader::Encoding::Flex)                                                                      \
+        func<NodeHeader::Encoding::Flex>(args);                                                                      \
+    else if (enc == NodeHeader::Encoding::Packed)                                                                    \
+        func<NodeHeader::Encoding::Packed>(args);                                                                    \
+    else if (enc == NodeHeader::Encoding::WTypBits)                                                                  \
+        func<NodeHeader::Encoding::WTypBits>(args);                                                                  \
+    else if (enc == NodeHeader::Encoding::WTypMult)                                                                  \
+        func<NodeHeader::Encoding::WTypMult>(args);                                                                  \
+    else if (enc == NodeHeader::Encoding::WTypIgn)                                                                   \
+    func<NodeHeader::Encoding::WTypIgn>(args)
+
+template <class... Args>
+void set_flags(NodeHeader::Encoding enc, uint64_t* header, Args&&... args)
+{
+    dispatch_on_enc(enc, NodeHeader::set_flags, header, args...);
+}
+template <class... Args>
+void set_flags(uint64_t* header, Args&&... args)
+{
+    auto enc = NodeHeader::get_encoding(header);
+    dispatch_on_enc(enc, NodeHeader::set_flags, header, args...);
+}
+template <class... Args>
+uint8_t get_flags(NodeHeader::Encoding enc, uint64_t* header, Args&&... args)
+{
+    dispatch_on_enc(enc, return NodeHeader::get_flags, header, args...);
+}
+template <class... Args>
+uint8_t get_flags(uint64_t* header, Args&&... args)
+{
+    auto enc = NodeHeader::get_encoding(header);
+    dispatch_on_enc(enc, return NodeHeader::get_flags, header, args...);
+}
 
 template <>
 void inline NodeHeader::set_element_size<NodeHeader::Encoding::Packed>(uint64_t* header, size_t bits_per_element)
