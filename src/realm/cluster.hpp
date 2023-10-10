@@ -77,6 +77,7 @@ private:
 
 class ClusterNode : public Array {
 public:
+    using ValueIterator = std::vector<FieldValues>::const_iterator;
     // This structure is used to bring information back to the upper nodes when
     // inserting new objects or finding existing ones.
     struct State {
@@ -137,6 +138,7 @@ public:
     virtual size_t get_tree_size() const = 0;
     /// Last key in this subtree
     virtual int64_t get_last_key_value() const = 0;
+    virtual int64_t get_space_in_last_cluster() const = 0;
     virtual void ensure_general_form() = 0;
 
     /// Initialize node from 'mem'
@@ -160,6 +162,8 @@ public:
     /// Create a new object identified by 'key' and update 'state' accordingly
     /// Return reference to new node created (if any)
     virtual ref_type insert(ObjKey k, const FieldValues& init_values, State& state) = 0;
+    /// Bulk insert values
+    virtual ref_type bulk_insert(ValueIterator begin, ValueIterator end, State& state) = 0;
     /// Locate object identified by 'key' and update 'state' accordingly
     void get(ObjKey key, State& state) const;
     /// Locate object identified by 'key' and update 'state' accordingly
@@ -270,6 +274,10 @@ public:
         auto sz = node_size();
         return sz ? get_key_value(sz - 1) : -1;
     }
+    int64_t get_space_in_last_cluster() const
+    {
+        return cluster_node_size - node_size();
+    }
     size_t lower_bound_key(ObjKey key) const
     {
         if (m_keys.is_attached()) {
@@ -301,6 +309,7 @@ public:
         return size() - s_first_col_index;
     }
     ref_type insert(ObjKey k, const FieldValues& init_values, State& state) override;
+    ref_type bulk_insert(ValueIterator begin, ValueIterator end, State& state) override;
     bool try_get(ObjKey k, State& state) const noexcept override;
     ObjKey get(size_t, State& state) const override;
     size_t get_ndx(ObjKey key, size_t ndx) const noexcept override;

@@ -89,12 +89,14 @@ public:
     size_t update_sub_tree_size();
 
     int64_t get_last_key_value() const override;
+    int64_t get_space_in_last_cluster() const override;
 
     void ensure_general_form() override;
     void insert_column(ColKey col) override;
     void remove_column(ColKey col) override;
     size_t nb_columns() const override;
     ref_type insert(ObjKey k, const FieldValues& init_values, State& state) override;
+    ref_type bulk_insert(ValueIterator begin, ValueIterator end, State& state) override;
     bool try_get(ObjKey k, State& state) const noexcept override;
     ObjKey get(size_t ndx, State& state) const override;
     size_t get_ndx(ObjKey key, size_t ndx) const noexcept override;
@@ -338,6 +340,67 @@ ref_type ClusterNodeInner::insert(ObjKey key, const FieldValues& init_values, Cl
 
         return child.get_ref();
     });
+}
+
+ref_type ClusterNodeInner::bulk_insert(ValueIterator begin, ValueIterator end, State& state)
+{
+    size_t last_ndx = node_size() - 1;
+    size_t offset;
+    if (m_keys.is_attached()) {
+        offset = m_keys.get(last_ndx);
+    }
+    else {
+        offset = last_ndx << m_shift_factor;
+    }
+
+    ref_type child_ref = _get_child_ref(last_ndx);
+    char* child_header = m_alloc.translate(child_ref);
+    auto mem = MemRef(child_header, child_ref, m_alloc);
+
+    bool child_is_leaf = !Array::get_is_inner_bptree_node_from_header(mem.get_addr());
+    ref_type new_node_ref = 0;
+    size_t to_insert = end - begin;
+    if (child_is_leaf) {
+        Cluster leaf(offset + m_offset, m_alloc, m_tree_top);
+        leaf.set_parent(this, last_ndx + s_first_node_index);
+        leaf.init(mem);
+        new_node_ref = leaf.bulk_insert(begin, end, state);
+    }
+    else {
+        ClusterNodeInner node(m_alloc, m_tree_top);
+        node.set_parent(this, last_ndx + s_first_node_index);
+        node.init(mem);
+        node.set_offset(offset + m_offset);
+        new_node_ref = node.bulk_insert(begin, end, state);
+    }
+
+    if (!new_node_ref) {
+        set_tree_size(get_tree_size() + to_insert);
+        return 0;
+    }
+
+    int64_t split_key_value = state.split_key + offset;
+    uint64_t sz = node_size();
+    if (sz < cluster_node_size) {
+        if (m_keys.is_attached()) {
+            m_keys.insert(sz, split_key_value);
+        }
+        else {
+            REALM_ASSERT(uint64_t(split_key_value) == sz << m_shift_factor);
+        }
+        _insert_child_ref(sz, new_node_ref);
+        return ref_type(0);
+    }
+    ClusterNodeInner child(m_alloc, m_tree_top);
+    child.create(m_sub_tree_depth);
+    child.add(new_node_ref);
+    state.split_key = split_key_value;
+
+    // Some objects has been moved out of this tree - find out how many
+    size_t child_sub_tree_size = child.update_sub_tree_size();
+    set_tree_size(get_tree_size() - child_sub_tree_size);
+
+    return child.get_ref();
 }
 
 bool ClusterNodeInner::try_get(ObjKey key, ClusterNode::State& state) const noexcept
@@ -757,6 +820,26 @@ int64_t ClusterNodeInner::get_last_key_value() const
     }
 }
 
+int64_t ClusterNodeInner::get_space_in_last_cluster() const
+{
+    auto last_ndx = node_size() - 1;
+
+    ref_type ref = _get_child_ref(last_ndx);
+    char* header = m_alloc.translate(ref);
+    bool child_is_leaf = !Array::get_is_inner_bptree_node_from_header(header);
+    MemRef mem(header, ref, m_alloc);
+    if (child_is_leaf) {
+        Cluster leaf(0, m_alloc, m_tree_top);
+        leaf.init(mem);
+        return leaf.get_space_in_last_cluster();
+    }
+    else {
+        ClusterNodeInner node(m_alloc, m_tree_top);
+        node.init(mem);
+        return node.get_space_in_last_cluster();
+    }
+}
+
 ClusterTree::ClusterTree(Table* owner, Allocator& alloc, size_t top_position_for_cluster_tree)
     : m_alloc(alloc)
     , m_owner(owner)
@@ -929,6 +1012,23 @@ void ClusterTree::insert_fast(ObjKey k, const FieldValues& init_values, ClusterN
         replace_root(std::move(new_root));
     }
     m_size++;
+}
+
+void ClusterTree::bulk_insert(const std::vector<FieldValues>& init_values)
+{
+    ClusterNode::State state;
+    ref_type new_sibling_ref = m_root->bulk_insert(init_values.begin(), init_values.end(), state);
+    if (REALM_UNLIKELY(new_sibling_ref)) {
+        auto new_root = std::make_unique<ClusterNodeInner>(m_root->get_alloc(), *this);
+        new_root->create(m_root->get_sub_tree_depth() + 1);
+
+        new_root->add(m_root->get_ref());                // Throws
+        new_root->add(new_sibling_ref, state.split_key); // Throws
+        new_root->update_sub_tree_size();
+
+        replace_root(std::move(new_root));
+    }
+    m_size += init_values.size();
 }
 
 Obj ClusterTree::insert(ObjKey k, const FieldValues& init_values)

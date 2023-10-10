@@ -439,6 +439,36 @@ void Cluster::insert_row(size_t ndx, ObjKey k, const FieldValues& init_values)
     m_tree_top.m_owner->for_each_and_every_column(insert_in_column);
 }
 
+ref_type Cluster::bulk_insert(ValueIterator begin, ValueIterator end, State& state)
+{
+    size_t sz = node_size();
+    uint64_t key_value;
+    if (m_keys.is_attached()) {
+        key_value = m_keys.get(m_keys.size() - 1);
+    }
+    else {
+        key_value = Array::get(s_key_ref_or_size_index) >> 1;
+    }
+    while (begin != end && sz < cluster_node_size) {
+        insert_row(sz, ObjKey(++key_value), *begin);
+        ++begin;
+        ++sz;
+    }
+    state.split_key = key_value;
+
+    if (begin == end)
+        return 0;
+
+    size_t remaining = end - begin;
+    REALM_ASSERT(remaining <= cluster_node_size);
+    Cluster new_leaf(0, m_alloc, m_tree_top);
+    new_leaf.create();
+    new_leaf.bulk_insert(begin, end, state);
+    state.mem = new_leaf.get_mem();
+    state.index = 0;
+    return new_leaf.get_ref();
+}
+
 template <class T>
 inline void Cluster::do_move(size_t ndx, ColKey col_key, Cluster* to)
 {

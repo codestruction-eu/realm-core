@@ -46,7 +46,7 @@ using namespace std::chrono;
 #include "test_types_helper.hpp"
 
 //#include <valgrind/callgrind.h>
-//#define PERFORMACE_TESTING
+#define PERFORMACE_TESTING
 
 using namespace realm;
 using namespace realm::util;
@@ -3025,10 +3025,11 @@ NONCONCURRENT_TEST(Table_object_sequential)
 
         auto t1 = steady_clock::now();
 
+        auto token = table->start_bulk_insert();
         for (int i = 0; i < nb_rows; i++) {
-            table->create_object(ObjKey(i)).set_all(i << 1, i << 2);
+            table->bulk_insert(token, FieldValues{{c0, i << 1}, {c1, i << 2}});
         }
-
+        token.reset();
         auto t2 = steady_clock::now();
         std::cout << "   insertion time: " << duration_cast<nanoseconds>(t2 - t1).count() / nb_rows << " ns/key"
                   << std::endl;
