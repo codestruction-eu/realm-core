@@ -44,8 +44,12 @@ void ClientHistory::set_client_file_ident_in_wt(version_type current_version, Sa
 
     Array& root = m_arrays->root;
     m_group->set_sync_file_id(client_file_ident.ident); // Throws
+    root.set(s_client_file_ident_iip,
+             RefOrTagged::make_tagged(client_file_ident.ident)); // Throws
     root.set(s_client_file_ident_salt_iip,
              RefOrTagged::make_tagged(client_file_ident.salt)); // Throws
+
+    m_client_file_ident = client_file_ident.ident;
 }
 
 
@@ -61,6 +65,8 @@ void ClientHistory::set_client_reset_adjustments(version_type current_version, S
     UploadCursor upload_progress = {0, 0};
     Array& root = m_arrays->root;
     m_group->set_sync_file_id(client_file_ident.ident); // Throws
+    root.set(s_client_file_ident_iip,
+             RefOrTagged::make_tagged(client_file_ident.ident)); // Throws
     root.set(s_client_file_ident_salt_iip,
              RefOrTagged::make_tagged(client_file_ident.salt)); // Throws
     root.set(s_progress_download_server_version_iip,
@@ -83,6 +89,8 @@ void ClientHistory::set_client_reset_adjustments(version_type current_version, S
              RefOrTagged::make_tagged(0)); // Throws
     root.set(s_progress_uploadable_bytes_iip,
              RefOrTagged::make_tagged(0)); // Throws
+
+    m_client_file_ident = client_file_ident.ident;
 
     // Discard existing synchronization history
     do_trim_sync_history(sync_history_size()); // Throws
@@ -152,7 +160,7 @@ int ClientReplication::get_history_schema_version() const noexcept
 // Overriding member function in realm::Replication
 bool ClientReplication::is_upgradable_history_schema(int stored_schema_version) const noexcept
 {
-    if (stored_schema_version == 11) {
+    if (stored_schema_version == 11 || stored_schema_version == 12) {
         return true;
     }
     return false;
@@ -176,12 +184,30 @@ void ClientReplication::upgrade_history_schema(int stored_schema_version)
         schema_version = 12;
     }
 
+    if (schema_version < 13) {
+        m_history.update_client_file_id();
+        schema_version = 13;
+    }
+
     // NOTE: Future migration steps go here.
 
     REALM_ASSERT(schema_version == get_client_history_schema_version());
 
     // Record migration event
     m_history.record_current_schema_version(); // Throws
+}
+
+void ClientHistory::update_client_file_id()
+{
+    using gf = _impl::GroupFriend;
+    Allocator& alloc = gf::get_alloc(*m_group);
+    auto ref = gf::get_history_ref(*m_group);
+    Array root{alloc};
+    root.init_from_ref(ref);
+    gf::set_history_parent(*m_group, root);
+
+    auto file_id = m_group->get_sync_file_id();
+    root.set(s_client_file_ident_iip, RefOrTagged::make_tagged(file_id));
 }
 
 void ClientHistory::compress_stored_changesets()
@@ -235,12 +261,13 @@ void ClientHistory::get_status(version_type& current_client_version, SaltedFileI
     TransactionRef rt = m_db->start_read(); // Throws
     version_type current_client_version_2 = rt->get_version();
 
-    SaltedFileIdent client_file_ident_2{rt->get_sync_file_id(), 0};
+    SaltedFileIdent client_file_ident_2{m_client_file_ident, 0};
     SyncProgress progress_2;
     using gf = _impl::GroupFriend;
     if (ref_type ref = gf::get_history_ref(*rt)) {
         Array root(m_db->get_alloc());
         root.init_from_ref(ref);
+        client_file_ident_2.ident = file_ident_type(root.get_as_ref_or_tagged(s_client_file_ident_iip).get_as_int());
         client_file_ident_2.salt = salt_type(root.get_as_ref_or_tagged(s_client_file_ident_salt_iip).get_as_int());
         progress_2.latest_server_version.version =
             version_type(root.get_as_ref_or_tagged(s_progress_latest_server_version_iip).get_as_int());
@@ -280,12 +307,16 @@ void ClientHistory::set_client_file_ident(SaltedFileIdent client_file_ident)
     prepare_for_write();           // Throws
 
     Array& root = m_arrays->root;
-    REALM_ASSERT(wt->get_sync_file_id() == 0);
+    REALM_ASSERT(m_client_file_ident == 0);
     wt->set_sync_file_id(client_file_ident.ident);
+    root.set(s_client_file_ident_iip,
+             RefOrTagged::make_tagged(client_file_ident.ident)); // Throws
     root.set(s_client_file_ident_salt_iip,
              RefOrTagged::make_tagged(client_file_ident.salt)); // Throws
     root.set(s_progress_download_client_version_iip, RefOrTagged::make_tagged(0));
     root.set(s_progress_upload_client_version_iip, RefOrTagged::make_tagged(0));
+
+    m_client_file_ident = client_file_ident.ident;
 
     // Note: This transaction produces an empty changeset. Empty changesets are
     // not uploaded to the server.
@@ -420,8 +451,7 @@ void ClientHistory::integrate_server_changesets(
         }
         VersionID old_version = transact->get_version_of_current_transaction();
         version_type local_version = old_version.version;
-        auto sync_file_id = transact->get_sync_file_id();
-        REALM_ASSERT(sync_file_id != 0);
+        REALM_ASSERT(m_client_file_ident != 0);
 
         ensure_updated(local_version); // Throws
         prepare_for_write();           // Throws
@@ -520,12 +550,11 @@ size_t ClientHistory::transform_and_apply_server_changesets(util::Span<Changeset
     }
 
     version_type local_version = transact->get_version_of_current_transaction().version;
-    auto sync_file_id = transact->get_sync_file_id();
 
     try {
         for (auto& changeset : changesets_to_integrate) {
             REALM_ASSERT(changeset.last_integrated_remote_version <= local_version);
-            REALM_ASSERT(changeset.origin_file_ident > 0 && changeset.origin_file_ident != sync_file_id);
+            REALM_ASSERT(changeset.origin_file_ident > 0 && changeset.origin_file_ident != m_client_file_ident);
 
             // It is possible that the synchronization history has been trimmed
             // to a point where a prefix of the merge window is no longer
@@ -555,9 +584,9 @@ size_t ClientHistory::transform_and_apply_server_changesets(util::Span<Changeset
             return !(m_db->other_writers_waiting_for_lock() &&
                      transact->get_commit_size() >= commit_byte_size_limit && allow_lock_release);
         };
-        auto changesets_transformed_count =
-            transformer.transform_remote_changesets(*this, sync_file_id, local_version, changesets_to_integrate,
-                                                    std::move(changeset_applier), logger); // Throws
+        auto changesets_transformed_count = transformer.transform_remote_changesets(
+            *this, m_client_file_ident, local_version, changesets_to_integrate, std::move(changeset_applier),
+            logger); // Throws
         return changesets_transformed_count;
     }
     catch (const BadChangesetError& e) {
@@ -1095,6 +1124,7 @@ void ClientHistory::update_from_ref_and_version(ref_type ref, version_type versi
         // No history
         m_ct_history_base_version = version;
         m_sync_history_base_version = version;
+        m_client_file_ident = 0;
         m_arrays.reset();
         m_progress_download = {0, 0};
         return;
@@ -1115,6 +1145,7 @@ void ClientHistory::update_from_ref_and_version(ref_type ref, version_type versi
     REALM_ASSERT(m_arrays->origin_timestamps.size() == sync_history_size());
 
     const Array& root = m_arrays->root;
+    m_client_file_ident = file_ident_type(root.get_as_ref_or_tagged(s_client_file_ident_iip).get_as_int());
     m_progress_download.server_version =
         version_type(root.get_as_ref_or_tagged(s_progress_download_server_version_iip).get_as_int());
     m_progress_download.last_integrated_client_version =
@@ -1167,6 +1198,7 @@ void ClientHistory::verify() const
     if (!m_arrays) {
         REALM_ASSERT(m_progress_download.server_version == 0);
         REALM_ASSERT(m_progress_download.last_integrated_client_version == 0);
+        REALM_ASSERT(m_client_file_ident == 0);
         return;
     }
     m_arrays->verify();

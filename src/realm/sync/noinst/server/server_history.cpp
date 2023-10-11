@@ -1700,13 +1700,7 @@ void ServerHistory::update_from_ref_and_version(ref_type ref, version_type realm
         dag.release();
     }
 
-    if (m_acc->upstream_status.is_attached()) {
-        file_ident_type file_ident = m_group->get_sync_file_id();
-        m_local_file_ident = (file_ident == 0 ? g_root_node_file_ident : file_ident);
-    }
-    else {
-        m_local_file_ident = g_root_node_file_ident;
-    }
+    m_local_file_ident = g_root_node_file_ident;
 
     m_num_client_files = m_acc->cf_ident_salts.size();
     REALM_ASSERT(m_acc->cf_client_versions.size() == m_num_client_files);

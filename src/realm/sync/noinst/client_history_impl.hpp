@@ -61,10 +61,12 @@ class ClientReplication;
 //       Cooked history was removed, except to verify that there is no cooked history.
 //
 //  12   History entries are compressed.
+//
+//  13   Client file id back in sync history
 
 constexpr int get_client_history_schema_version() noexcept
 {
-    return 12;
+    return 13;
 }
 
 class IntegrationException : public RuntimeError {
@@ -302,6 +304,10 @@ private:
     /// add_sync_history_entry() is called, it is equal to that plus one.
     mutable version_type m_sync_history_base_version = 0;
 
+    /// The identifier assigned to this file by the server. A cache of the
+    /// `s_client_file_ident_iip` slot in `m_top`.
+    mutable file_ident_type m_client_file_ident = 0;
+
     using IntegerBpTree = BPlusTree<int64_t>;
     struct Arrays {
         // Create the client history arrays in the target group
@@ -426,6 +432,7 @@ private:
     void record_current_schema_version();
     static void record_current_schema_version(Array& schema_versions, version_type snapshot_version);
     void compress_stored_changesets();
+    void update_client_file_id();
 
     size_t sync_history_size() const noexcept
     {

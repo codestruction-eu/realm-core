@@ -1462,12 +1462,6 @@ Group* Table::get_parent_group() const noexcept
     return static_cast<Group*>(parent);
 }
 
-inline uint64_t Table::get_sync_file_id() const noexcept
-{
-    Group* g = get_parent_group();
-    return g ? g->get_sync_file_id() : 0;
-}
-
 size_t Table::get_index_in_group() const noexcept
 {
     if (!m_top.is_attached())

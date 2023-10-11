@@ -790,8 +790,6 @@ private:
 
     ColumnType get_real_column_type(ColKey col_key) const noexcept;
 
-    uint64_t get_sync_file_id() const noexcept;
-
     /// Create an empty table with independent spec and return just
     /// the reference to the underlying memory.
     static ref_type create_empty_table(Allocator&, TableKey = TableKey());
