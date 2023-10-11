@@ -548,7 +548,9 @@ public:
     else if (enc == NodeHeader::Encoding::WTypMult)                                                                  \
         func<NodeHeader::Encoding::WTypMult>(args);                                                                  \
     else if (enc == NodeHeader::Encoding::WTypIgn)                                                                   \
-    func<NodeHeader::Encoding::WTypIgn>(args)
+        func<NodeHeader::Encoding::WTypIgn>(args);                                                                   \
+    else                                                                                                             \
+        REALM_ASSERT(false && "Unknown header encoding");
 
 template <class... Args>
 void set_flags(NodeHeader::Encoding enc, uint64_t* header, Args&&... args)
@@ -571,6 +573,11 @@ uint8_t get_flags(uint64_t* header, Args&&... args)
 {
     auto enc = NodeHeader::get_encoding(header);
     dispatch_on_enc(enc, return NodeHeader::get_flags, header, args...);
+}
+
+void test(uint64_t* header)
+{
+    get_flags(header);
 }
 
 template <>
