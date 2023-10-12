@@ -9,6 +9,7 @@
 * `SyncManager::path_for_realm()` would return `/<path>/filename.realm.realm` if `custom_file_name` was set to `filename.realm` and the file didn't exist. It would correctly return `/<path>/filename.realm` if the file already existed. After this fix `/<path>/filename.realm` is returned in all cases. ([#7038](https://github.com/realm/realm-core/issues/7038))
 * Fixed a bug preventing SSL handshake from completing successfuly due to failed hostname verification when linking against BoringSSL. (PR [#7034](https://github.com/realm/realm-core/pull/7034))
 * Updating subscriptions did not trigger Realm autorefreshes, sometimes resulting in async refresh hanging until another write was performed by something else ([PR #7031](https://github.com/realm/realm-core/pull/7031)).
+* Fix compilation with non-beta Xcode 15. Building for visionOS now requires explicitly specifying `-DCMAKE_XCODE_ATTRIBUTE_SDKROOT=xros` (PR [#7055](https://github.com/realm/realm-core/pull/7055)).
 
 ### Breaking changes
 * None.
