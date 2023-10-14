@@ -1679,9 +1679,15 @@ void SessionWrapper::on_download_completion()
     if (m_flx_subscription_store && m_flx_pending_mark_version != SubscriptionSet::EmptyVersion) {
         m_sess->logger.debug("Marking query version %1 as complete after receiving MARK message",
                              m_flx_pending_mark_version);
-        auto mutable_subs = m_flx_subscription_store->get_mutable_by_version(m_flx_pending_mark_version);
-        mutable_subs.update_state(SubscriptionSet::State::Complete);
-        mutable_subs.commit();
+        try {
+            auto mutable_subs = m_flx_subscription_store->get_mutable_by_version(m_flx_pending_mark_version);
+            mutable_subs.update_state(SubscriptionSet::State::Complete);
+            mutable_subs.commit();
+        }
+        catch (const KeyNotFound&) {
+            m_sess->logger.warn("Ignoring MARK message for pending query version %1 because it was not found",
+                                m_flx_pending_mark_version);
+        }
         m_flx_pending_mark_version = SubscriptionSet::EmptyVersion;
     }
 
@@ -1782,6 +1788,14 @@ util::Future<std::string> SessionWrapper::send_test_command(std::string body)
 void SessionWrapper::handle_pending_client_reset_acknowledgement()
 {
     REALM_ASSERT(!m_finalized);
+
+    // after a client reset, the subscriptions may have changed
+    if (m_flx_subscription_store) {
+        auto versions_info = m_flx_subscription_store->get_version_info();
+        m_flx_active_version = versions_info.active;
+        m_flx_latest_version = versions_info.latest;
+        m_flx_pending_mark_version = versions_info.pending_mark;
+    }
 
     auto pending_reset = [&] {
         auto ft = m_db->start_frozen();

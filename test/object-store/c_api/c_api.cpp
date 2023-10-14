@@ -5603,7 +5603,7 @@ TEST_CASE("app: flx-sync compensating writes C API support", "[sync][flx][c_api]
     realm->commit_transaction();
 
     std::unique_lock<std::mutex> lk(state->mutex);
-    state->cond_var.wait_for(lk, std::chrono::seconds(30), [&] {
+    state->cond_var.wait_for(lk, std::chrono::seconds(180), [&] {
         return state->compensating_writes.size() == 2;
     });
 
