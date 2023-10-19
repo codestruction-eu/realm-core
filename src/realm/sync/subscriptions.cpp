@@ -592,7 +592,11 @@ SubscriptionSet MutableSubscriptionSet::commit()
         if (m_state == State::Uncommitted) {
             m_state = State::Pending;
         }
-        m_obj.set(mgr->m_sub_set_snapshot_version, static_cast<int64_t>(m_tr->get_version()));
+
+        // m_tr->get_version() gives the read transaction number that this write is based on.
+        // What we want to commit as the snapshot_version is actually the version of this commit,
+        // so assuming sequential commits and we have the write lock, we use m_tr->get_version() + 1.
+        m_obj.set(mgr->m_sub_set_snapshot_version, static_cast<int64_t>(m_tr->get_version() + 1));
 
         auto obj_sub_list = m_obj.get_linklist(mgr->m_sub_set_subscriptions);
         obj_sub_list.clear();
