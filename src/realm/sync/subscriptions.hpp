@@ -81,8 +81,8 @@ public:
      *                    │           │                                         │
      *                    │           │                                         ▼
      *   Uncommitted──►Pending──►Bootstrapping──►AwaitingMark──►Complete───►Superseded
-     *                    │                            ▲
-     *                    │                            │
+     *                    │ ▲         │                ▲
+     *                    │ └─────────┘                │
      *                    └────────────────────────────┘
      *
      */
@@ -275,6 +275,7 @@ protected:
                            MakingMutableCopy making_mutable_copy = MakingMutableCopy{false});
 
     void insert_sub(const Subscription& sub);
+    void on_boostrap_cleared();
 
 private:
     // To refresh a MutableSubscriptionSet, you should call commit() and call refresh() on its return value.
@@ -357,6 +358,8 @@ public:
     // subscriptions. Must be called from the event loop thread to prevent data race issues
     // with the subscription store.
     void terminate();
+
+    void clear_bootstrapping_by_versions(TransactionRef transact, std::vector<int64_t> versions);
 
 private:
     using std::enable_shared_from_this<SubscriptionStore>::weak_from_this;

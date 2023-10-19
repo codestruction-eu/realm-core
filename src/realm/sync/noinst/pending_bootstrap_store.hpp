@@ -81,7 +81,7 @@ public:
     void add_batch(int64_t query_version, util::Optional<SyncProgress> progress,
                    const std::vector<Transformer::RemoteChangeset>& changesets, bool* created_new_batch);
 
-    void clear();
+    void clear(util::UniqueFunction<void(TransactionRef, std::vector<int64_t>)> versions_handler);
 
 
 private:

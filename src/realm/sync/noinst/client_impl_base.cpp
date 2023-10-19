@@ -2443,7 +2443,7 @@ Status Session::receive_download_message(const SyncProgress& progress, std::uint
 
 Status Session::receive_mark_message(request_ident_type request_ident)
 {
-    logger.debug("Received: MARK(request_ident=%1)", request_ident); // Throws
+    logger.debug("Received: MARK(request_ident=%1, state=%2)", request_ident, m_state); // Throws
 
     // Ignore the message if the deactivation process has been initiated,
     // because in that case, the associated Realm and SessionWrapper must

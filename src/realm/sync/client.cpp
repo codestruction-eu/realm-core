@@ -249,6 +249,7 @@ private:
     void on_flx_sync_version_complete(int64_t version);
 
     void report_progress(bool only_if_new_uploadable_data = false);
+    void refresh_flx_state();
 
     friend class SessionWrapperStack;
     friend class ClientImpl::Session;
@@ -880,7 +881,11 @@ void SessionImpl::process_pending_flx_bootstrap()
             // Close the write transation before clearing the bootstrap store to avoid a deadlock because the
             // bootstrap store requires a write transaction itself.
             transact->close();
-            bootstrap_store->clear();
+            bootstrap_store->clear([this](TransactionRef transact, std::vector<int64_t> versions) {
+                if (auto sub_store = m_wrapper.get_flx_subscription_store()) {
+                    sub_store->clear_bootstrapping_by_versions(transact, versions);
+                }
+            });
             return;
         }
 
@@ -1132,11 +1137,7 @@ SessionWrapper::SessionWrapper(ClientImpl& client, DBRef db, std::shared_ptr<Sub
     REALM_ASSERT(m_db->get_replication());
     REALM_ASSERT(dynamic_cast<ClientReplication*>(m_db->get_replication()));
 
-    if (m_flx_subscription_store) {
-        auto versions_info = m_flx_subscription_store->get_version_info();
-        m_flx_active_version = versions_info.active;
-        m_flx_pending_mark_version = versions_info.pending_mark;
-    }
+    refresh_flx_state();
 }
 
 SessionWrapper::~SessionWrapper() noexcept
@@ -1147,6 +1148,14 @@ SessionWrapper::~SessionWrapper() noexcept
     }
 }
 
+void SessionWrapper::refresh_flx_state()
+{
+    if (m_flx_subscription_store) {
+        auto versions_info = m_flx_subscription_store->get_version_info();
+        m_flx_active_version = versions_info.active;
+        m_flx_pending_mark_version = versions_info.pending_mark;
+    }
+}
 
 inline ClientReplication& SessionWrapper::get_replication() noexcept
 {
@@ -1665,6 +1674,9 @@ void SessionWrapper::on_upload_completion()
 
 void SessionWrapper::on_download_completion()
 {
+    m_sess->logger.debug("on_download_completion() with m_flx_pending_mark_version=%1, has store ? %2",
+                         m_flx_pending_mark_version, bool(m_flx_subscription_store));
+
     while (!m_download_completion_handlers.empty()) {
         auto handler = std::move(m_download_completion_handlers.back());
         m_download_completion_handlers.pop_back();
@@ -1790,12 +1802,7 @@ void SessionWrapper::handle_pending_client_reset_acknowledgement()
     REALM_ASSERT(!m_finalized);
 
     // after a client reset, the subscriptions may have changed
-    if (m_flx_subscription_store) {
-        auto versions_info = m_flx_subscription_store->get_version_info();
-        m_flx_active_version = versions_info.active;
-        m_flx_latest_version = versions_info.latest;
-        m_flx_pending_mark_version = versions_info.pending_mark;
-    }
+    refresh_flx_state();
 
     auto pending_reset = [&] {
         auto ft = m_db->start_frozen();

@@ -137,10 +137,13 @@ TEST(Sync_PendingBootstrapStoreClear)
     CHECK_EQUAL(pending_batch.query_version, 2);
     CHECK(pending_batch.progress);
     CHECK_EQUAL(pending_batch.changesets.size(), 2);
-
-    store.clear();
-
+    std::vector<int64_t> versions_cleared;
+    store.clear([&versions_cleared](TransactionRef, std::vector<int64_t> versions) {
+        versions_cleared = versions;
+    });
     CHECK_NOT(store.has_pending());
+    CHECK_EQUAL(versions_cleared.size(), 1);
+    CHECK_EQUAL(versions_cleared[0], 2);
     pending_batch = store.peek_pending(1024);
     CHECK_EQUAL(pending_batch.changesets.size(), 0);
     CHECK_EQUAL(pending_batch.query_version, 0);

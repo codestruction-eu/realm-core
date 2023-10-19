@@ -632,6 +632,8 @@ LocalVersionIDs perform_client_reset_diff(DBRef db_local, DBRef db_remote, sync:
         // now that the state of the fresh and local Realms are identical,
         // reset the local sync history.
         // Note that we do not set the new file ident yet! This is done in the last commit.
+        // We don't want to use the new ident until all recovery commits are done because if anything
+        // fails along the way, we still want this client to receive another client reset from the server.
         history_local->set_client_reset_adjustments(wt_local->get_version(), orig_file_ident, fresh_server_version,
                                                     recovered_changeset);
         // The local Realm is committed. There are no changes to the remote Realm.

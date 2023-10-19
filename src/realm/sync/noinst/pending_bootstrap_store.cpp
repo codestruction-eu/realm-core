@@ -192,10 +192,24 @@ bool PendingBootstrapStore::has_pending()
     return m_has_pending;
 }
 
-void PendingBootstrapStore::clear()
+void PendingBootstrapStore::clear(util::UniqueFunction<void(TransactionRef, std::vector<int64_t>)> versions_handler)
 {
     auto tr = m_db->start_write();
     auto bootstrap_table = tr->get_table(m_table);
+    std::vector<int64_t> versions_to_clear;
+    for (auto it = bootstrap_table->begin(); it != bootstrap_table->end(); ++it) {
+        versions_to_clear.push_back(it->get<int64_t>(m_query_version));
+    }
+    if (m_db->get_logger() && m_db->get_logger()->would_log(util::Logger::Level::debug)) {
+        std::string versions_cleared;
+        for (auto v : versions_to_clear) {
+            versions_cleared += util::format("%1%2", versions_cleared.empty() ? "" : ", ", v);
+        }
+        m_db->get_logger()->debug(
+            "clearing pending bootstrap store of size: %1 transaction number %2, versions: {%3}",
+            bootstrap_table->size(), tr->get_version(), versions_cleared);
+    }
+    versions_handler(tr, versions_to_clear);
     bootstrap_table->clear();
     m_has_pending = false;
     tr->commit();

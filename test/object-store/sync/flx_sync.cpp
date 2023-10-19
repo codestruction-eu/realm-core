@@ -2094,6 +2094,7 @@ TEST_CASE("flx: interrupted bootstrap restarts/recovers on reconnect", "[sync][f
     }
 
     auto realm = Realm::get_shared_realm(interrupted_realm_config);
+    realm->get_latest_subscription_set().get_state_change_notification(sync::SubscriptionSet::State::Complete).get();
 
     timed_wait_for(
         [&]() -> bool {
@@ -2105,7 +2106,6 @@ TEST_CASE("flx: interrupted bootstrap restarts/recovers on reconnect", "[sync][f
         },
         std::chrono::seconds(120));
 
-    realm->get_latest_subscription_set().get_state_change_notification(sync::SubscriptionSet::State::Complete).get();
     auto active_subs = realm->get_active_subscription_set();
     auto latest_subs = realm->get_latest_subscription_set();
     REQUIRE(active_subs.version() == latest_subs.version());

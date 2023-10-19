@@ -352,6 +352,18 @@ void MutableSubscriptionSet::insert_sub(const Subscription& sub)
     m_subs.push_back(sub);
 }
 
+void MutableSubscriptionSet::on_boostrap_cleared()
+{
+    update_state(State::Pending);
+    auto mgr = get_flx_subscription_store(); // Throws
+    m_obj.set(mgr->m_sub_set_state, state_to_storage(m_state));
+    m_obj.set(mgr->m_sub_set_snapshot_version, static_cast<int64_t>(m_tr->get_version()));
+    if (!m_error_str.empty()) {
+        m_obj.set(mgr->m_sub_set_error_str, StringData(m_error_str));
+    }
+    process_notifications();
+}
+
 std::pair<SubscriptionSet::iterator, bool>
 MutableSubscriptionSet::insert_or_assign_impl(iterator it, util::Optional<std::string> name,
                                               std::string object_class_name, std::string query_str)
@@ -440,6 +452,10 @@ void MutableSubscriptionSet::update_state(State new_state, util::Optional<std::s
             throw std::logic_error("Cannot set a subscription to the superseded state");
             break;
         case State::Pending:
+            if (old_state == State::Bootstrapping) {
+                m_state = new_state;
+                break;
+            }
             throw std::logic_error("Cannot set subscription set to the pending state");
             break;
     }
@@ -960,6 +976,17 @@ MutableSubscriptionSet SubscriptionStore::make_mutable_copy(const SubscriptionSe
 bool SubscriptionStore::would_refresh(DB::version_type version) const noexcept
 {
     return version < m_db->get_version_of_latest_snapshot();
+}
+
+void SubscriptionStore::clear_bootstrapping_by_versions(TransactionRef transact, std::vector<int64_t> versions)
+{
+    REALM_ASSERT(transact->get_transact_stage() == DB::transact_Writing);
+    auto sub_sets = transact->get_table(m_sub_set_table);
+    for (auto version : versions) {
+        MutableSubscriptionSet mut_sub(weak_from_this(), transact,
+                                       sub_sets->get_object_with_primary_key(Mixed{version}));
+        mut_sub.on_boostrap_cleared();
+    }
 }
 
 } // namespace realm::sync
