@@ -281,6 +281,9 @@ TEST(Tokenizer_Basic)
 
     tok->reset("with-hyphen -term -other-term-plus");
     CHECK(tok->get_all_tokens() == std::set<std::string>({"with", "hyphen", "term", "other", "plus"}));
+
+    tok->reset("中国人 幸福  你好");
+    CHECK(tok->get_all_tokens() == std::set<std::string>({"中国人", "幸福", "你好"}));
 }
 
 TEST(StringIndex_NonIndexable)
