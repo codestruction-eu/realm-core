@@ -97,7 +97,7 @@ public:
     void do_with_new_user(Func&& func)
     {
         create_user_and_log_in(m_test_session.app());
-        func(m_test_session.app()->current_user());
+        func(m_test_session.app()->backing_store()->get_current_user());
     }
 
     template <typename Func>
@@ -113,7 +113,8 @@ public:
     template <typename Func>
     void load_initial_data(Func&& func)
     {
-        SyncTestFile config(m_test_session.app()->current_user(), schema(), SyncConfig::FLXSyncEnabled{});
+        SyncTestFile config(m_test_session.app()->backing_store()->get_current_user(), schema(),
+                            SyncConfig::FLXSyncEnabled{});
         auto realm = Realm::get_shared_realm(config);
         subscribe_to_all_and_bootstrap(*realm);
 
@@ -140,7 +141,8 @@ public:
 
     SyncTestFile make_test_file() const
     {
-        return SyncTestFile(app()->current_user(), schema(), realm::SyncConfig::FLXSyncEnabled{});
+        return SyncTestFile(app()->backing_store()->get_current_user(), schema(),
+                            realm::SyncConfig::FLXSyncEnabled{});
     }
 
 private:

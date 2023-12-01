@@ -92,6 +92,7 @@ set(HEADERS
 if(REALM_ENABLE_SYNC)
     list(APPEND HEADERS
         sync/app.hpp
+        sync/app_backing_store.hpp
         sync/app_utils.hpp
         sync/app_credentials.hpp
         sync/generic_network_transport.hpp
@@ -144,6 +145,32 @@ if(REALM_ENABLE_SYNC)
             sync/impl/emscripten/network_transport.cpp
             sync/impl/emscripten/socket_provider.cpp)
     endif()
+elseif(REALM_APP_SERVICES)
+    list(APPEND HEADERS
+        sync/app.hpp
+        sync/app_backing_store.hpp
+        sync/app_utils.hpp
+        sync/app_credentials.hpp
+        sync/generic_network_transport.hpp
+        sync/app_service_client.hpp
+        sync/auth_request_client.hpp
+        sync/mongo_client.hpp
+        sync/mongo_collection.hpp
+        sync/mongo_database.hpp
+        sync/push_client.hpp
+        sync/subscribable.hpp
+
+        sync/impl/network_reachability.hpp)
+
+    list(APPEND SOURCES
+        sync/app.cpp
+        sync/app_utils.cpp
+        sync/app_credentials.cpp
+        sync/generic_network_transport.cpp
+        sync/mongo_client.cpp
+        sync/mongo_collection.cpp
+        sync/mongo_database.cpp
+        sync/push_client.cpp)
 endif()
 
 add_library(ObjectStore STATIC ${SOURCES} ${HEADERS})

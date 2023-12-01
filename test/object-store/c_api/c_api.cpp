@@ -586,7 +586,14 @@ TEST_CASE("C API (non-database)", "[c_api]") {
         realm_app_config_set_bundle_id(app_config.get(), "some_bundle_id");
         CHECK(app_config->device_info.bundle_id == "some_bundle_id");
 
-        auto test_app = std::make_shared<app::App>(*app_config);
+        std::string temp_dir = util::make_temp_dir();
+        auto guard = util::make_scope_exit([&temp_dir]() noexcept {
+            util::try_remove_dir_recursive(temp_dir);
+        });
+        app::BackingStoreConfig backing_config;
+        backing_config.base_file_path = temp_dir;
+        backing_config.metadata_mode = app::BackingStoreConfig::MetadataMode::NoMetadata;
+        auto test_app = app::App::get_shared_app(*app_config, backing_config);
         auto credentials = app::AppCredentials::anonymous();
         // Verify the values above are included in the login request
         test_app->log_in_with_credentials(credentials, [&](const std::shared_ptr<realm::SyncUser>&,
@@ -5195,7 +5202,7 @@ TEST_CASE("C API - async_open", "[sync][pbs][c_api]") {
     SECTION("can open synced Realms that don't already exist") {
         realm_config_t* config = realm_config_new();
         config->schema = Schema{object_schema};
-        realm_user user(init_sync_manager.app()->current_user());
+        realm_user user(init_sync_manager.app()->backing_store()->get_current_user());
         realm_sync_config_t* sync_config = realm_sync_config_new(&user, "default");
         realm_sync_config_set_initial_subscription_handler(sync_config, task_init_subscription, false, nullptr,
                                                            nullptr);
@@ -5236,7 +5243,7 @@ TEST_CASE("C API - async_open", "[sync][pbs][c_api]") {
 
         realm_config_t* config = realm_config_new();
         config->schema = Schema{object_schema};
-        realm_user user(init_sync_manager.app()->current_user());
+        realm_user user(init_sync_manager.app()->backing_store()->get_current_user());
         realm_sync_config_t* sync_config = realm_sync_config_new(&user, "realm");
         realm_sync_config_set_initial_subscription_handler(sync_config, task_init_subscription, false, nullptr,
                                                            nullptr);
@@ -5368,7 +5375,7 @@ TEST_CASE("C API - binding callback thread observer", "[sync][c_api]") {
 }
 #endif
 
-#if REALM_ENABLE_AUTH_TESTS
+#if REALM_ENABLE_AUTH_TESTS && REALM_ENABLE_SYNC
 
 std::atomic_bool baas_client_stop{false};
 std::atomic<std::size_t> error_handler_counter{0};
@@ -5394,7 +5401,7 @@ TEST_CASE("C API - client reset", "[sync][pbs][c_api][client reset][baas]") {
     auto app = test_app_session.app();
     auto get_valid_config = [&]() -> SyncTestFile {
         create_user_and_log_in(app);
-        return SyncTestFile(app->current_user(), partition.value, schema);
+        return SyncTestFile(app->backing_store()->get_current_user(), partition.value, schema);
     };
     SyncTestFile local_config = get_valid_config();
     SyncTestFile remote_config = get_valid_config();
@@ -5858,7 +5865,8 @@ TEST_CASE("app: flx-sync compensating writes C API support", "[sync][flx][c_api]
     using namespace realm::app;
     FLXSyncTestHarness harness("c_api_comp_writes");
     create_user_and_log_in(harness.app());
-    SyncTestFile test_config(harness.app()->current_user(), harness.schema(), realm::SyncConfig::FLXSyncEnabled{});
+    SyncTestFile test_config(harness.app()->backing_store()->get_current_user(), harness.schema(),
+                             realm::SyncConfig::FLXSyncEnabled{});
     test_config.sync_config = std::make_shared<realm_sync_config_t>(*test_config.sync_config);
     realm_sync_config_t* sync_config = static_cast<realm_sync_config_t*>(test_config.sync_config.get());
 
@@ -6506,7 +6514,7 @@ TEST_CASE("C API app: websocket provider", "[sync][app][c_api][baas]") {
         FLXSyncTestHarness harness("c_api_websocket_provider", FLXSyncTestHarness::default_server_schema(),
                                    instance_of<SynchronousTestTransport>, *socket_provider);
 
-        SyncTestFile test_config(harness.app()->current_user(), harness.schema(),
+        SyncTestFile test_config(harness.app()->backing_store()->get_current_user(), harness.schema(),
                                  realm::SyncConfig::FLXSyncEnabled{});
         auto realm = Realm::get_shared_realm(test_config);
         bool wait_success = wait_for_download(*realm);

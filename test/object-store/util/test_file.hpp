@@ -25,18 +25,22 @@
 #include <realm/util/logger.hpp>
 #include <realm/util/optional.hpp>
 
+#include <memory>
 #include <thread>
 
 #if REALM_ENABLE_SYNC
 #include <realm/sync/config.hpp>
 #include <realm/object-store/sync/sync_manager.hpp>
-#include <realm/object-store/sync/app.hpp>
 #include "test_utils.hpp"
 
 #include <realm/sync/client.hpp>
 #include <realm/sync/noinst/server/server.hpp>
 
 #endif // REALM_ENABLE_SYNC
+
+#if REALM_ENABLE_AUTH_TESTS
+#include <realm/object-store/sync/app.hpp>
+#endif
 
 #ifndef TEST_TIMEOUT_EXTRA
 #define TEST_TIMEOUT_EXTRA 0
@@ -112,6 +116,49 @@ void on_change_but_no_notify(realm::Realm& realm);
 #endif // TEST_ENABLE_LOGGING
 #endif // TEST_LOGGING_LEVEL
 
+#if REALM_ENABLE_AUTH_TESTS
+using DeleteApp = realm::util::TaggedBool<struct DeleteAppTag>;
+class TestAppSession {
+public:
+    TestAppSession();
+    TestAppSession(realm::AppSession, std::shared_ptr<realm::app::GenericNetworkTransport> = nullptr,
+                   DeleteApp = true, realm::ReconnectMode reconnect_mode = realm::ReconnectMode::normal,
+                   std::shared_ptr<realm::sync::SyncSocketProvider> custom_socket_provider = nullptr);
+    ~TestAppSession();
+
+    std::shared_ptr<realm::app::App> app() const noexcept
+    {
+        return m_app;
+    }
+    const realm::AppSession& app_session() const noexcept
+    {
+        return *m_app_session;
+    }
+    realm::app::GenericNetworkTransport* transport()
+    {
+        return m_transport.get();
+    }
+    std::shared_ptr<realm::SyncManager> sync_manager() const noexcept
+    {
+        return m_app->sync_manager();
+    }
+    std::shared_ptr<realm::app::BackingStore> const& backing_store() const noexcept
+    {
+        return m_app->backing_store();
+    }
+
+    std::vector<realm::bson::BsonDocument> get_documents(realm::SyncUser& user, const std::string& object_type,
+                                                         size_t expected_count) const;
+
+private:
+    std::shared_ptr<realm::app::App> m_app;
+    std::unique_ptr<realm::AppSession> m_app_session;
+    std::string m_base_file_path;
+    bool m_delete_app = true;
+    std::shared_ptr<realm::app::GenericNetworkTransport> m_transport;
+};
+#endif
+
 #if REALM_ENABLE_SYNC
 
 using StartImmediately = realm::util::TaggedBool<class StartImmediatelyTag>;
@@ -184,41 +231,6 @@ struct SyncTestFile : TestFile {
     SyncTestFile(std::shared_ptr<realm::SyncUser> user, realm::Schema schema, realm::SyncConfig::FLXSyncEnabled);
 };
 
-#if REALM_ENABLE_AUTH_TESTS
-using DeleteApp = realm::util::TaggedBool<struct DeleteAppTag>;
-class TestAppSession {
-public:
-    TestAppSession();
-    TestAppSession(realm::AppSession, std::shared_ptr<realm::app::GenericNetworkTransport> = nullptr,
-                   DeleteApp = true, realm::ReconnectMode reconnect_mode = realm::ReconnectMode::normal,
-                   std::shared_ptr<realm::sync::SyncSocketProvider> custom_socket_provider = nullptr);
-    ~TestAppSession();
-
-    std::shared_ptr<realm::app::App> app() const noexcept
-    {
-        return m_app;
-    }
-    const realm::AppSession& app_session() const noexcept
-    {
-        return *m_app_session;
-    }
-    realm::app::GenericNetworkTransport* transport()
-    {
-        return m_transport.get();
-    }
-
-    std::vector<realm::bson::BsonDocument> get_documents(realm::SyncUser& user, const std::string& object_type,
-                                                         size_t expected_count) const;
-
-private:
-    std::shared_ptr<realm::app::App> m_app;
-    std::unique_ptr<realm::AppSession> m_app_session;
-    std::string m_base_file_path;
-    bool m_delete_app = true;
-    std::shared_ptr<realm::app::GenericNetworkTransport> m_transport;
-};
-#endif
-
 class TestSyncManager {
 public:
     struct Config {
@@ -240,6 +252,10 @@ public:
     std::shared_ptr<realm::app::App> app() const noexcept
     {
         return m_app;
+    }
+    std::shared_ptr<realm::SyncManager> sync_manager() const
+    {
+        return m_app->sync_manager();
     }
     std::string base_file_path() const
     {

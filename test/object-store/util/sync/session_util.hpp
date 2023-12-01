@@ -130,7 +130,7 @@ std::shared_ptr<SyncSession> sync_session(
     std::shared_ptr<SyncSession> session;
     {
         auto realm = Realm::get_shared_realm(config);
-        session = user->sync_manager()->get_existing_session(config.path);
+        session = user->backing_store()->app().lock()->sync_manager()->get_existing_session(config.path);
     }
     return session;
 }

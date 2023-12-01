@@ -76,6 +76,15 @@ if(REALM_ENABLE_SYNC)
     if(APPLE)
         list(APPEND SOURCES audit.cpp)
     endif()
+
+elseif(REALM_APP_SERVICES)
+    list(APPEND HEADERS
+        util/sync/baas_admin_api.hpp
+    )
+    list(APPEND SOURCES
+        sync/app_services.cpp
+        util/sync/sync_test_utils.cpp
+    )
 endif()
 
 set_property(DIRECTORY PROPERTY TEST_RESOURCES "${RESOURCES}")
@@ -125,7 +134,7 @@ if(REALM_ENABLE_SYNC)
     endif()
 endif()
 
-if(REALM_ENABLE_SYNC)
+if(REALM_ENABLE_SYNC OR REALM_APP_SERVICES)
     target_link_libraries(ObjectStoreTestLib SyncServer)
     option(REALM_ENABLE_AUTH_TESTS "" OFF)
     if(REALM_ENABLE_AUTH_TESTS)

@@ -173,7 +173,7 @@ TEST_CASE("Test server migration and rollback", "[sync][flx][flx migration][baas
     trigger_server_migration(session.app_session(), MigrateToFLX, logger_ptr);
 
     {
-        SyncTestFile flx_config(session.app()->current_user(), server_app_config.schema,
+        SyncTestFile flx_config(session.app()->backing_store()->get_current_user(), server_app_config.schema,
                                 SyncConfig::FLXSyncEnabled{});
 
         auto flx_realm = Realm::get_shared_realm(flx_config);
@@ -226,7 +226,7 @@ TEST_CASE("Test server migration and rollback", "[sync][flx][flx migration][baas
 
     // Try to connect as FLX
     {
-        SyncTestFile flx_config(session.app()->current_user(), server_app_config.schema,
+        SyncTestFile flx_config(session.app()->backing_store()->get_current_user(), server_app_config.schema,
                                 SyncConfig::FLXSyncEnabled{});
         auto [err_promise, err_future] = util::make_promise_future<SyncError>();
         util::CopyablePromiseHolder promise(std::move(err_promise));
@@ -406,8 +406,8 @@ TEST_CASE("Test client migration and rollback with recovery", "[sync][flx][flx m
     }
 
     // Wait for the object to be written to Atlas/MongoDB before rollback, otherwise it may be lost
-    reset_utils::wait_for_object_to_persist_to_atlas(session.app()->current_user(), session.app_session(), "Object",
-                                                     {{"_id", obj_id}});
+    reset_utils::wait_for_object_to_persist_to_atlas(session.app()->backing_store()->get_current_user(),
+                                                     session.app_session(), "Object", {{"_id", obj_id}});
 
     //  Roll back to PBS
     trigger_server_migration(session.app_session(), RollbackToPBS, logger_ptr);
@@ -633,7 +633,7 @@ TEST_CASE("Update to native FLX after migration", "[sync][flx][flx migration][ba
 
     // Update to native FLX
     {
-        SyncTestFile flx_config(session.app()->current_user(), server_app_config.schema,
+        SyncTestFile flx_config(session.app()->backing_store()->get_current_user(), server_app_config.schema,
                                 SyncConfig::FLXSyncEnabled{});
         flx_config.path = config.path;
 
@@ -657,7 +657,7 @@ TEST_CASE("Update to native FLX after migration", "[sync][flx][flx migration][ba
 
     // Open a new realm and check all data is sync'ed.
     {
-        SyncTestFile flx_config(session.app()->current_user(), server_app_config.schema,
+        SyncTestFile flx_config(session.app()->backing_store()->get_current_user(), server_app_config.schema,
                                 SyncConfig::FLXSyncEnabled{});
 
         auto flx_realm = Realm::get_shared_realm(flx_config);
@@ -680,7 +680,7 @@ TEST_CASE("Update to native FLX after migration", "[sync][flx][flx migration][ba
 
     // Connect again as native FLX: server replies with SwitchToPBS
     {
-        SyncTestFile flx_config(session.app()->current_user(), server_app_config.schema,
+        SyncTestFile flx_config(session.app()->backing_store()->get_current_user(), server_app_config.schema,
                                 SyncConfig::FLXSyncEnabled{});
         flx_config.path = config.path;
 
@@ -744,7 +744,8 @@ TEST_CASE("New table is synced after migration", "[sync][flx][flx migration][baa
 
     // Open a new realm with an additional table.
     {
-        SyncTestFile flx_config(session.app()->current_user(), two_obj_schema, SyncConfig::FLXSyncEnabled{});
+        SyncTestFile flx_config(session.app()->backing_store()->get_current_user(), two_obj_schema,
+                                SyncConfig::FLXSyncEnabled{});
 
         auto flx_realm = Realm::get_shared_realm(flx_config);
 

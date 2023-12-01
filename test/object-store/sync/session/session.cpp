@@ -45,8 +45,8 @@ static const std::string dummy_device_id = "123400000000000000000000";
 
 static std::shared_ptr<SyncUser> get_user(const std::shared_ptr<app::App>& app)
 {
-    return app->sync_manager()->get_user("user_id", ENCODE_FAKE_JWT("fake_refresh_token"),
-                                         ENCODE_FAKE_JWT("fake_access_token"), dummy_device_id);
+    return app->backing_store()->get_user("user_id", ENCODE_FAKE_JWT("fake_refresh_token"),
+                                          ENCODE_FAKE_JWT("fake_access_token"), dummy_device_id);
 }
 
 TEST_CASE("SyncSession: management by SyncUser", "[sync][session]") {
@@ -444,7 +444,7 @@ TEST_CASE("sync: error handling", "[sync][session]") {
         std::string recovery_path = error->user_info[SyncError::c_recovery_file_path_key];
         auto idx = recovery_path.find("recovered_realm");
         CHECK(idx != std::string::npos);
-        idx = recovery_path.find(app->sync_manager()->recovery_directory_path());
+        idx = recovery_path.find(app->backing_store()->recovery_directory_path());
         CHECK(idx != std::string::npos);
         if (just_before.tm_year == just_after.tm_year) {
             idx = recovery_path.find(util::format_local_time(just_after_raw, "%Y"));
@@ -528,7 +528,7 @@ TEST_CASE("sync: stop policy behavior", "[sync][session]") {
             std::shared_ptr<SyncSession> session2;
             {
                 auto realm = Realm::get_shared_realm(config);
-                session2 = user->sync_manager()->get_existing_session(config.path);
+                session2 = user->backing_store()->app().lock()->sync_manager()->get_existing_session(config.path);
             }
             REQUIRE(session->state() == SyncSession::State::Active);
             REQUIRE(session2 == session);

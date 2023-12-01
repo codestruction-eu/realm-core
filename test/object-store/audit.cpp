@@ -78,7 +78,7 @@ util::Optional<std::string> to_optional_string(StringData sd)
 std::vector<AuditEvent> get_audit_events(TestSyncManager& manager, bool parse_events = true)
 {
     // Wait for all sessions to be fully uploaded and then tear them down
-    auto sync_manager = manager.app()->sync_manager();
+    auto sync_manager = manager.sync_manager();
     REALM_ASSERT(sync_manager);
     auto sessions = sync_manager->get_all_sessions();
     for (auto& session : sessions) {
@@ -1678,7 +1678,7 @@ TEST_CASE("audit integration tests", "[sync][pbs][audit][baas]") {
     app_create_config.dev_mode_enabled = false;
     TestAppSession session = create_app(app_create_config);
 
-    SyncTestFile config(session.app()->current_user(), bson::Bson("default"));
+    SyncTestFile config(session.app()->backing_store()->get_current_user(), bson::Bson("default"));
     config.schema = schema;
     config.audit_config = std::make_shared<AuditConfig>();
     config.audit_config->logger = audit_logger;
@@ -1719,7 +1719,7 @@ TEST_CASE("audit integration tests", "[sync][pbs][audit][baas]") {
 
     SECTION("different user from parent Realm") {
         create_user_and_log_in(session.app());
-        config.audit_config->audit_user = session.app()->current_user();
+        config.audit_config->audit_user = session.app()->backing_store()->get_current_user();
         auto realm = Realm::get_shared_realm(config);
         // If audit uses the sync user this'll make it fail as that user is logged out
         config.sync_config->user->log_out();
@@ -1772,10 +1772,10 @@ TEST_CASE("audit integration tests", "[sync][pbs][audit][baas]") {
 
     SECTION("removed sync user") {
         create_user_and_log_in(session.app());
-        auto audit_user = session.app()->current_user();
+        auto audit_user = session.app()->backing_store()->get_current_user();
         config.audit_config->audit_user = audit_user;
         auto realm = Realm::get_shared_realm(config);
-        session.app()->sync_manager()->remove_user(audit_user->identity());
+        session.app()->backing_store()->remove_user(audit_user->identity());
 
         auto audit = realm->audit_context();
         auto scope = audit->begin_scope("scope");
@@ -1794,7 +1794,7 @@ TEST_CASE("audit integration tests", "[sync][pbs][audit][baas]") {
     SECTION("AuditEvent missing from server schema") {
         app_create_config.schema = no_audit_event_schema;
         TestAppSession session_2 = create_app(app_create_config);
-        SyncTestFile config(session_2.app()->current_user(), bson::Bson("default"));
+        SyncTestFile config(session_2.app()->backing_store()->get_current_user(), bson::Bson("default"));
         config.schema = no_audit_event_schema;
         config.audit_config = std::make_shared<AuditConfig>();
 
@@ -1866,7 +1866,7 @@ TEST_CASE("audit integration tests", "[sync][pbs][audit][baas]") {
         create_user_and_log_in(harness.app());
 
         SECTION("auditing a flexible sync realm without specifying an audit user throws an exception") {
-            SyncTestFile config(harness.app()->current_user(), {}, SyncConfig::FLXSyncEnabled{});
+            SyncTestFile config(harness.app()->backing_store()->get_current_user(), {}, SyncConfig::FLXSyncEnabled{});
             config.audit_config = std::make_shared<AuditConfig>();
             REQUIRE_THROWS_CONTAINING(Realm::get_shared_realm(config), "partition-based sync");
         }

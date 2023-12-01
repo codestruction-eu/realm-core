@@ -19,10 +19,10 @@
 #ifndef REALM_OS_SYNC_USER_HPP
 #define REALM_OS_SYNC_USER_HPP
 
-#include <realm/object-store/util/atomic_shared_ptr.hpp>
-#include <realm/util/bson/bson.hpp>
 #include <realm/object-store/sync/subscribable.hpp>
+#include <realm/object-store/util/atomic_shared_ptr.hpp>
 
+#include <realm/util/bson/bson.hpp>
 #include <realm/util/checked_mutex.hpp>
 #include <realm/util/optional.hpp>
 #include <realm/table.hpp>
@@ -36,6 +36,7 @@
 namespace realm {
 namespace app {
 struct AppError;
+class BackingStore;
 class MongoClient;
 } // namespace app
 class SyncManager;
@@ -227,7 +228,7 @@ public:
     // Optionally set a context factory. If so, must be set before any sessions are created.
     static void set_binding_context_factory(SyncUserContextFactory factory);
 
-    std::shared_ptr<SyncManager> sync_manager() const REQUIRES(!m_mutex);
+    std::shared_ptr<app::BackingStore> backing_store() const REQUIRES(!m_mutex);
 
     /// Retrieves a general-purpose service client for the Realm Cloud service
     /// @param service_name The name of the cluster
@@ -240,8 +241,8 @@ public:
 
     // Don't use this directly; use the `SyncManager` APIs. Public for use with `make_shared`.
     SyncUser(const std::string& refresh_token, const std::string& id, const std::string& access_token,
-             const std::string& device_id, SyncManager* sync_manager);
-    SyncUser(const SyncUserMetadata& data, SyncManager* sync_manager);
+             const std::string& device_id, std::shared_ptr<app::BackingStore> backing_store);
+    SyncUser(const SyncUserMetadata& data, std::shared_ptr<app::BackingStore> backing_store);
 
     // Atomically set the user to be logged in and update both tokens.
     void log_in(const std::string& access_token, const std::string& refresh_token)
@@ -281,9 +282,8 @@ public:
         m_seconds_to_adjust_time_for_testing.store(seconds);
     }
 
-protected:
-    friend class SyncManager;
-    void detach_from_sync_manager() REQUIRES(!m_mutex);
+    // FIXME: Not for public use.
+    void detach_from_backing_store() REQUIRES(!m_mutex);
 
 private:
     static SyncUserContextFactory s_binding_context_factory;
@@ -328,7 +328,7 @@ private:
 
     const std::string m_device_id;
 
-    SyncManager* m_sync_manager;
+    std::shared_ptr<app::BackingStore> m_backing_store; // FIXME: maybe make this a weak_ptr
 
     std::atomic<int> m_seconds_to_adjust_time_for_testing = 0;
 };

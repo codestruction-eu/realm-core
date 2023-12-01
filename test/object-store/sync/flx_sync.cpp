@@ -282,7 +282,8 @@ static auto make_client_reset_handler()
 TEST_CASE("app: error handling integration test", "[sync][flx][baas]") {
     static std::optional<FLXSyncTestHarness> harness{"error_handling"};
     create_user_and_log_in(harness->app());
-    SyncTestFile config(harness->app()->current_user(), harness->schema(), SyncConfig::FLXSyncEnabled{});
+    SyncTestFile config(harness->app()->backing_store()->get_current_user(), harness->schema(),
+                        SyncConfig::FLXSyncEnabled{});
     auto&& [error_future, error_handler] = make_error_handler();
     config.sync_config->error_handler = std::move(error_handler);
     config.sync_config->client_resync_mode = ClientResyncMode::Manual;
@@ -495,7 +496,7 @@ TEST_CASE("flx: client reset", "[sync][flx][client reset][baas]") {
         return count;
     };
     create_user_and_log_in(harness.app());
-    auto user1 = harness.app()->current_user();
+    auto user1 = harness.app()->backing_store()->get_current_user();
     create_user_and_log_in(harness.app());
     auto user2 = harness.app()->current_user();
     SyncTestFile config_local(user1, harness.schema(), SyncConfig::FLXSyncEnabled{});
@@ -1452,7 +1453,7 @@ TEST_CASE("flx: uploading an object that is out-of-view results in compensating 
     }
 
     create_user_and_log_in(harness->app());
-    auto user = harness->app()->current_user();
+    auto user = harness->app()->backing_store()->get_current_user();
 
     auto make_error_handler = [] {
         auto [error_promise, error_future] = util::make_promise_future<SyncError>();
@@ -1843,7 +1844,7 @@ TEST_CASE("flx: geospatial", "[sync][flx][geospatial][baas]") {
             };
             auto run_query_on_server = [&](const bson::BsonDocument& filter,
                                            std::optional<std::string> expected_error = {}) -> size_t {
-                auto remote_client = harness->app()->current_user()->mongo_client("BackingDB");
+                auto remote_client = harness->app()->backing_store()->get_current_user()->mongo_client("BackingDB");
                 auto db = remote_client.db(harness->session().app_session().config.mongo_dbname);
                 auto restaurant_collection = db["restaurant"];
                 bool processed = false;
@@ -1948,7 +1949,7 @@ TEST_CASE("flx: geospatial", "[sync][flx][geospatial][baas]") {
                     return num_objects;
                 };
 
-                reset_utils::wait_for_num_objects_in_atlas(harness->app()->current_user(),
+                reset_utils::wait_for_num_objects_in_atlas(harness->app()->backing_store()->get_current_user(),
                                                            harness->session().app_session(), "restaurant",
                                                            points.size() - invalids_to_be_compensated);
 
@@ -2059,7 +2060,7 @@ TEST_CASE("flx: interrupted bootstrap restarts/recovers on reconnect", "[sync][f
     FLXSyncTestHarness harness("flx_bootstrap_reconnect", {g_large_array_schema, {"queryable_int_field"}});
 
     std::vector<ObjectId> obj_ids_at_end = fill_large_array_schema(harness);
-    SyncTestFile interrupted_realm_config(harness.app()->current_user(), harness.schema(),
+    SyncTestFile interrupted_realm_config(harness.app()->backing_store()->get_current_user(), harness.schema(),
                                           SyncConfig::FLXSyncEnabled{});
     interrupted_realm_config.cache = false;
 
@@ -2435,7 +2436,8 @@ TEST_CASE("flx: verify websocket protocol number and prefixes", "[sync][protocol
 #ifndef _WIN32
 TEST_CASE("flx: subscriptions persist after closing/reopening", "[sync][flx][baas]") {
     FLXSyncTestHarness harness("flx_bad_query");
-    SyncTestFile config(harness.app()->current_user(), harness.schema(), SyncConfig::FLXSyncEnabled{});
+    SyncTestFile config(harness.app()->backing_store()->get_current_user(), harness.schema(),
+                        SyncConfig::FLXSyncEnabled{});
 
     {
         auto orig_realm = Realm::get_shared_realm(config);
@@ -2490,7 +2492,8 @@ TEST_CASE("flx: connect to FLX as PBS returns an error", "[sync][flx][baas]") {
 
 TEST_CASE("flx: connect to FLX with partition value returns an error", "[sync][flx][protocol][baas]") {
     FLXSyncTestHarness harness("connect_to_flx_as_pbs");
-    SyncTestFile config(harness.app()->current_user(), harness.schema(), SyncConfig::FLXSyncEnabled{});
+    SyncTestFile config(harness.app()->backing_store()->get_current_user(), harness.schema(),
+                        SyncConfig::FLXSyncEnabled{});
     config.sync_config->partition_value = "\"foobar\"";
 
     REQUIRE_EXCEPTION(Realm::get_shared_realm(config), IllegalCombination,
@@ -2538,7 +2541,7 @@ TEST_CASE("flx: commit subscription while refreshing the access token", "[sync][
     auto transport = std::make_shared<HookedTransport>();
     FLXSyncTestHarness harness("flx_wait_access_token2", FLXSyncTestHarness::default_server_schema(), transport);
     auto app = harness.app();
-    std::shared_ptr<SyncUser> user = app->current_user();
+    std::shared_ptr<SyncUser> user = app->backing_store()->get_current_user();
     REQUIRE(user);
     REQUIRE(!user->access_token_refresh_required());
     // Set a bad access token, with an expired time. This will trigger a refresh initiated by the client.
@@ -2566,7 +2569,8 @@ TEST_CASE("flx: commit subscription while refreshing the access token", "[sync][
             }
         }
     };
-    SyncTestFile config(harness.app()->current_user(), harness.schema(), SyncConfig::FLXSyncEnabled{});
+    SyncTestFile config(harness.app()->backing_store()->get_current_user(), harness.schema(),
+                        SyncConfig::FLXSyncEnabled{});
     // This triggers the token refresh.
     auto r = Realm::get_shared_realm(config);
     REQUIRE(seen_waiting_for_access_token);
@@ -2940,8 +2944,8 @@ TEST_CASE("flx: data ingest", "[sync][flx][data ingest][baas]") {
     static std::unordered_map<std::string, size_t> previous_count;
     auto get_documents = [&](const char* name, size_t expected_count) {
         auto& count = previous_count[name];
-        auto documents =
-            harness->session().get_documents(*harness->app()->current_user(), name, count + expected_count);
+        auto documents = harness->session().get_documents(*harness->app()->backing_store()->get_current_user(), name,
+                                                          count + expected_count);
         count = documents.size();
         return documents;
     };
@@ -3314,7 +3318,8 @@ TEST_CASE("flx: data ingest - write not allowed", "[sync][flx][data ingest][baas
     FLXSyncTestHarness harness("asymmetric_sync", server_schema);
 
     auto error_received_pf = util::make_promise_future<void>();
-    SyncTestFile config(harness.app()->current_user(), harness.schema(), SyncConfig::FLXSyncEnabled{});
+    SyncTestFile config(harness.app()->backing_store()->get_current_user(), harness.schema(),
+                        SyncConfig::FLXSyncEnabled{});
     config.sync_config->on_sync_client_event_hook =
         [promise = util::CopyablePromiseHolder(std::move(error_received_pf.promise))](
             std::weak_ptr<SyncSession> weak_session, const SyncClientHookData& data) mutable {
@@ -3358,7 +3363,8 @@ TEST_CASE("flx: send client error", "[sync][flx][baas]") {
 
     // An integration error is simulated while bootstrapping.
     // This results in the client sending an error message to the server.
-    SyncTestFile config(harness.app()->current_user(), harness.schema(), SyncConfig::FLXSyncEnabled{});
+    SyncTestFile config(harness.app()->backing_store()->get_current_user(), harness.schema(),
+                        SyncConfig::FLXSyncEnabled{});
     config.sync_config->simulate_integration_error = true;
 
     auto [error_promise, error_future] = util::make_promise_future<SyncError>();
@@ -3435,7 +3441,8 @@ TEST_CASE("flx: bootstraps contain all changes", "[sync][flx][bootstrap][baas]")
     };
 
     SECTION("regular subscription change") {
-        SyncTestFile triggered_config(harness.app()->current_user(), harness.schema(), SyncConfig::FLXSyncEnabled{});
+        SyncTestFile triggered_config(harness.app()->backing_store()->get_current_user(), harness.schema(),
+                                      SyncConfig::FLXSyncEnabled{});
         std::atomic<bool> saw_truncated_bootstrap{false};
         triggered_config.sync_config->on_sync_client_event_hook = [&](std::weak_ptr<SyncSession> weak_sess,
                                                                       const SyncClientHookData& data) {
@@ -3490,7 +3497,8 @@ TEST_CASE("flx: bootstraps contain all changes", "[sync][flx][bootstrap][baas]")
 // TODO: remote-baas: This test fails intermittently with Windows remote baas server - to be fixed in RCORE-1674
 #ifndef _WIN32
     SECTION("disconnect between bootstrap and mark") {
-        SyncTestFile triggered_config(harness.app()->current_user(), harness.schema(), SyncConfig::FLXSyncEnabled{});
+        SyncTestFile triggered_config(harness.app()->backing_store()->get_current_user(), harness.schema(),
+                                      SyncConfig::FLXSyncEnabled{});
         auto [interrupted_promise, interrupted] = util::make_promise_future<void>();
         triggered_config.sync_config->on_sync_client_event_hook =
             [promise = util::CopyablePromiseHolder(std::move(interrupted_promise)), &bizz_obj_id,

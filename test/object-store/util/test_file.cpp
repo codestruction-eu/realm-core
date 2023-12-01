@@ -126,6 +126,109 @@ DBOptions InMemoryTestFile::options() const
     return options;
 }
 
+// MARK: - TestAppSession
+
+#if REALM_ENABLE_AUTH_TESTS
+
+TestAppSession::TestAppSession()
+    : TestAppSession(get_runtime_app_session(), nullptr, DeleteApp{false})
+{
+}
+
+TestAppSession::TestAppSession(AppSession session,
+                               std::shared_ptr<realm::app::GenericNetworkTransport> custom_transport,
+                               DeleteApp delete_app, ReconnectMode reconnect_mode,
+                               std::shared_ptr<realm::sync::SyncSocketProvider> custom_socket_provider)
+    : m_app_session(std::make_unique<AppSession>(session))
+    , m_base_file_path(util::make_temp_dir() + random_string(10))
+    , m_delete_app(delete_app)
+    , m_transport(custom_transport)
+{
+    if (!m_transport)
+        m_transport = instance_of<SynchronousTestTransport>;
+    auto app_config = get_config(m_transport, *m_app_session);
+    util::Logger::set_default_level_threshold(realm::util::Logger::Level::TEST_LOGGING_LEVEL);
+    set_app_config_defaults(app_config, m_transport);
+
+    util::try_make_dir(m_base_file_path);
+    SyncClientConfig sc_config;
+    sc_config.backing_store_config.base_file_path = m_base_file_path;
+    sc_config.backing_store_config.metadata_mode = realm::SyncManager::MetadataMode::NoEncryption;
+    sc_config.reconnect_mode = reconnect_mode;
+    sc_config.socket_provider = custom_socket_provider;
+    // With multiplexing enabled, the linger time controls how long a
+    // connection is kept open for reuse. In tests, we want to shut
+    // down sync clients immediately.
+    sc_config.timeouts.connection_linger_time = 0;
+
+    m_app = app::App::get_uncached_app(app_config, sc_config);
+
+    // initialize sync client
+    m_app->sync_manager()->get_sync_client();
+    create_user_and_log_in(m_app);
+}
+
+TestAppSession::~TestAppSession()
+{
+    if (util::File::exists(m_base_file_path)) {
+        try {
+            m_app->sync_manager()->reset_for_testing();
+            util::try_remove_dir_recursive(m_base_file_path);
+        }
+        catch (const std::exception& ex) {
+            std::cerr << ex.what() << "\n";
+        }
+        app::App::clear_cached_apps();
+    }
+    if (m_delete_app) {
+        m_app_session->admin_api.delete_app(m_app_session->server_app_id);
+    }
+}
+
+std::vector<bson::BsonDocument> TestAppSession::get_documents(SyncUser& user, const std::string& object_type,
+                                                              size_t expected_count) const
+{
+    app::MongoClient remote_client = user.mongo_client("BackingDB");
+    app::MongoDatabase db = remote_client.db(m_app_session->config.mongo_dbname);
+    app::MongoCollection collection = db[object_type];
+    int sleep_time = 10;
+    timed_wait_for(
+        [&] {
+            uint64_t count = 0;
+            collection.count({}, [&](uint64_t c, util::Optional<app::AppError> error) {
+                REQUIRE(!error);
+                count = c;
+            });
+            if (count < expected_count) {
+                // querying the server too frequently makes it take longer to process the sync changesets we're
+                // waiting for
+                millisleep(sleep_time);
+                if (sleep_time < 500) {
+                    sleep_time *= 2;
+                }
+                return false;
+            }
+            return true;
+        },
+        std::chrono::minutes(5));
+
+    std::vector<bson::BsonDocument> documents;
+    collection.find({}, {},
+                    [&](util::Optional<std::vector<bson::Bson>>&& result, util::Optional<app::AppError> error) {
+                        REQUIRE(result);
+                        REQUIRE(!error);
+                        REQUIRE(result->size() == expected_count);
+                        documents.reserve(result->size());
+                        for (auto&& bson : *result) {
+                            REQUIRE(bson.type() == bson::Bson::Type::Document);
+                            documents.push_back(std::move(static_cast<bson::BsonDocument&>(bson)));
+                        }
+                    });
+    return documents;
+}
+#endif // REALM_ENABLE_AUTH_TESTS
+
+
 #if REALM_ENABLE_SYNC
 
 static const std::string fake_refresh_token = ENCODE_FAKE_JWT("not_a_real_token");
@@ -134,7 +237,7 @@ static const std::string fake_device_id = "123400000000000000000000";
 
 static std::shared_ptr<SyncUser> get_fake_user(app::App& app, const std::string& user_name)
 {
-    return app.sync_manager()->get_user(user_name, fake_refresh_token, fake_access_token, fake_device_id);
+    return app.backing_store()->get_user(user_name, fake_refresh_token, fake_access_token, fake_device_id);
 }
 
 SyncTestFile::SyncTestFile(std::shared_ptr<app::App> app, std::string name, std::string user_name)
@@ -187,7 +290,7 @@ SyncTestFile::SyncTestFile(std::shared_ptr<realm::SyncUser> user, realm::Schema 
 }
 
 SyncTestFile::SyncTestFile(std::shared_ptr<app::App> app, bson::Bson partition, Schema schema)
-    : SyncTestFile(app->current_user(), std::move(partition), std::move(schema))
+    : SyncTestFile(app->backing_store()->get_current_user(), std::move(partition), std::move(schema))
 {
 }
 
@@ -319,108 +422,6 @@ void set_app_config_defaults(app::App::Config& app_config,
         app_config.app_id = "app_id";
 }
 
-// MARK: - TestAppSession
-
-#if REALM_ENABLE_AUTH_TESTS
-
-TestAppSession::TestAppSession()
-    : TestAppSession(get_runtime_app_session(), nullptr, DeleteApp{false})
-{
-}
-
-TestAppSession::TestAppSession(AppSession session,
-                               std::shared_ptr<realm::app::GenericNetworkTransport> custom_transport,
-                               DeleteApp delete_app, ReconnectMode reconnect_mode,
-                               std::shared_ptr<realm::sync::SyncSocketProvider> custom_socket_provider)
-    : m_app_session(std::make_unique<AppSession>(session))
-    , m_base_file_path(util::make_temp_dir() + random_string(10))
-    , m_delete_app(delete_app)
-    , m_transport(custom_transport)
-{
-    if (!m_transport)
-        m_transport = instance_of<SynchronousTestTransport>;
-    auto app_config = get_config(m_transport, *m_app_session);
-    util::Logger::set_default_level_threshold(realm::util::Logger::Level::TEST_LOGGING_LEVEL);
-    set_app_config_defaults(app_config, m_transport);
-
-    util::try_make_dir(m_base_file_path);
-    SyncClientConfig sc_config;
-    sc_config.base_file_path = m_base_file_path;
-    sc_config.metadata_mode = realm::SyncManager::MetadataMode::NoEncryption;
-    sc_config.reconnect_mode = reconnect_mode;
-    sc_config.socket_provider = custom_socket_provider;
-    // With multiplexing enabled, the linger time controls how long a
-    // connection is kept open for reuse. In tests, we want to shut
-    // down sync clients immediately.
-    sc_config.timeouts.connection_linger_time = 0;
-
-    m_app = app::App::get_uncached_app(app_config, sc_config);
-
-    // initialize sync client
-    m_app->sync_manager()->get_sync_client();
-    create_user_and_log_in(m_app);
-}
-
-TestAppSession::~TestAppSession()
-{
-    if (util::File::exists(m_base_file_path)) {
-        try {
-            m_app->sync_manager()->reset_for_testing();
-            util::try_remove_dir_recursive(m_base_file_path);
-        }
-        catch (const std::exception& ex) {
-            std::cerr << ex.what() << "\n";
-        }
-        app::App::clear_cached_apps();
-    }
-    if (m_delete_app) {
-        m_app_session->admin_api.delete_app(m_app_session->server_app_id);
-    }
-}
-
-std::vector<bson::BsonDocument> TestAppSession::get_documents(SyncUser& user, const std::string& object_type,
-                                                              size_t expected_count) const
-{
-    app::MongoClient remote_client = user.mongo_client("BackingDB");
-    app::MongoDatabase db = remote_client.db(m_app_session->config.mongo_dbname);
-    app::MongoCollection collection = db[object_type];
-    int sleep_time = 10;
-    timed_wait_for(
-        [&] {
-            uint64_t count = 0;
-            collection.count({}, [&](uint64_t c, util::Optional<app::AppError> error) {
-                REQUIRE(!error);
-                count = c;
-            });
-            if (count < expected_count) {
-                // querying the server too frequently makes it take longer to process the sync changesets we're
-                // waiting for
-                millisleep(sleep_time);
-                if (sleep_time < 500) {
-                    sleep_time *= 2;
-                }
-                return false;
-            }
-            return true;
-        },
-        std::chrono::minutes(5));
-
-    std::vector<bson::BsonDocument> documents;
-    collection.find({}, {},
-                    [&](util::Optional<std::vector<bson::Bson>>&& result, util::Optional<app::AppError> error) {
-                        REQUIRE(result);
-                        REQUIRE(!error);
-                        REQUIRE(result->size() == expected_count);
-                        documents.reserve(result->size());
-                        for (auto&& bson : *result) {
-                            REQUIRE(bson.type() == bson::Bson::Type::Document);
-                            documents.push_back(std::move(static_cast<bson::BsonDocument&>(bson)));
-                        }
-                    });
-    return documents;
-}
-#endif // REALM_ENABLE_AUTH_TESTS
-
 // MARK: - TestSyncManager
 
 TestSyncManager::TestSyncManager(const Config& config, const SyncServer::Config& sync_server_config)
@@ -435,8 +436,8 @@ TestSyncManager::TestSyncManager(const Config& config, const SyncServer::Config&
     SyncClientConfig sc_config;
     m_base_file_path = config.base_path.empty() ? util::make_temp_dir() + random_string(10) : config.base_path;
     util::try_make_dir(m_base_file_path);
-    sc_config.base_file_path = m_base_file_path;
-    sc_config.metadata_mode = config.metadata_mode;
+    sc_config.backing_store_config.base_file_path = m_base_file_path;
+    sc_config.backing_store_config.metadata_mode = config.metadata_mode;
 
     m_app = app::App::get_uncached_app(app_config, sc_config);
     if (config.override_sync_route) {
