@@ -117,6 +117,12 @@ nlohmann::json BaasRuleBuilder::object_schema_to_jsonschema(const ObjectSchema& 
         }
     }
 
+    if (obj_schema.table_type == ObjectSchema::ObjectType::Embedded) {
+        return {
+            {"properties", properties},
+            {"required", required},
+        };
+    }
     return {
         {"properties", properties},
         {"required", required},

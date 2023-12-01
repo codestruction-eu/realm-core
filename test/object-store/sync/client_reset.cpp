@@ -286,8 +286,14 @@ TEST_CASE("sync: client reset", "[sync][pbs][client reset][baas]") {
              {"pk link", PropertyType::Object | PropertyType::Nullable, "pk link target"},
              {"list", PropertyType::Object | PropertyType::Array, "link target"},
              {"pk list", PropertyType::Object | PropertyType::Array, "pk link target"},
+             {"embedded link", PropertyType::Object | PropertyType::Nullable, "embedded"},
              partition_prop,
          }},
+        {"embedded",
+            ObjectSchema::ObjectType::Embedded,
+            {
+                {"value", PropertyType::Int},
+            }},
     };
     auto server_app_config = minimal_app_config("client_reset_tests", schema);
     server_app_config.partition_key = partition_prop;
