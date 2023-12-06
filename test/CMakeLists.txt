@@ -121,7 +121,7 @@ set(FUZZY_TEST_SOURCES fuzz_group.cpp)
 
 set(CORE_TESTS ${CORE_TEST_SOURCES} ${LARGE_TEST_SOURCES} ${FUZZY_TEST_SOURCES})
 
-set_source_files_properties(test_query_geo.cpp PROPERTIES
+set_source_files_properties(test_query_geo.cpp test_json.cpp PROPERTIES
     INCLUDE_DIRECTORIES "${RealmCore_SOURCE_DIR}/src/external"
     # the only flag not supported with pragma diagnostic disable in src file by gcc until 13.
     COMPILE_FLAGS "$<$<CXX_COMPILER_ID:GNU>: -Wno-unknown-pragmas>"
@@ -168,7 +168,7 @@ if(WINDOWS_STORE)
     set_property(SOURCE ${UWP_ASSETS} PROPERTY VS_DEPLOYMENT_LOCATION "Assets")
 endif()
 
-target_link_libraries(CoreTests TestUtil QueryParser)
+target_link_libraries(CoreTests TestUtil QueryParser Bson)
 enable_stdfilesystem(CoreTests)
 
 if(UNIX AND NOT APPLE)
