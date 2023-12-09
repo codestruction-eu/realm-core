@@ -1774,6 +1774,9 @@ void Session::send_message()
     if (!m_bind_message_sent)
         return send_bind_message(); // Throws
 
+    if (m_error_to_send)
+        return send_json_error_message(); // Throws
+
     if (!m_ident_message_sent) {
         if (have_client_file_ident())
             send_ident_message(); // Throws
@@ -1787,9 +1790,6 @@ void Session::send_message()
     if (has_pending_test_command) {
         return send_test_command_message();
     }
-
-    if (m_error_to_send)
-        return send_json_error_message(); // Throws
 
     // Stop sending upload, mark and query messages when the client detects an error.
     if (m_client_error) {
@@ -2149,7 +2149,7 @@ void Session::send_unbind_message()
 void Session::send_json_error_message()
 {
     REALM_ASSERT_EX(m_state == Active || m_state == Deactivating, m_state);
-    REALM_ASSERT(m_ident_message_sent);
+    REALM_ASSERT(m_bind_message_sent);
     REALM_ASSERT(!m_unbind_message_sent);
     REALM_ASSERT(m_error_to_send);
     REALM_ASSERT(m_client_error);
