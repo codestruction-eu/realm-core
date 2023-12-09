@@ -1452,7 +1452,8 @@ inline bool ClientImpl::Session::have_client_file_ident() const noexcept
 
 inline bool ClientImpl::Session::unbind_process_complete() const noexcept
 {
-    return (m_unbind_message_send_complete && (m_error_message_received || m_unbound_message_received));
+    return (m_unbind_message_send_complete && !m_error_to_send &&
+            (m_error_message_received || m_unbound_message_received));
 }
 
 inline void ClientImpl::Session::connection_established(bool fast_reconnect)

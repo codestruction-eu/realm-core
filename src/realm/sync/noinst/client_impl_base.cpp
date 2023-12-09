@@ -1581,9 +1581,10 @@ void Session::on_integration_failure(const IntegrationException& error)
 
     m_client_error = util::make_optional<IntegrationException>(error);
     m_error_to_send = true;
-
+    SessionErrorInfo error_info{error.to_status(), IsFatal{false}};
+    error_info.server_requests_action = ProtocolErrorInfo::Action::Warning;
     // Surface the error to the user otherwise is lost.
-    on_connection_state_changed(m_conn.get_state(), SessionErrorInfo{error.to_status(), IsFatal{false}});
+    on_connection_state_changed(m_conn.get_state(), std::move(error_info));
 
     // Since the deactivation process has not been initiated, the UNBIND
     // message cannot have been sent unless an ERROR message was received.
@@ -1684,10 +1685,10 @@ void Session::activate()
         process_pending_flx_bootstrap();
     }
     catch (const IntegrationException& error) {
-        logger.error("Error integrating bootstrap changesets: %1", error.what());
-        m_suspended = true;
-        m_conn.one_less_active_unsuspended_session(); // Throws
-        on_suspended(SessionErrorInfo{Status{error.code(), error.what()}, IsFatal{true}});
+        on_integration_failure(error);
+    }
+    catch (...) {
+        on_integration_failure(IntegrationException(exception_to_status()));
     }
 
     if (has_pending_client_reset) {
@@ -1750,7 +1751,7 @@ void Session::send_message()
     REALM_ASSERT_EX(m_state == Active || m_state == Deactivating, m_state);
     REALM_ASSERT(m_enlisted_to_send);
     m_enlisted_to_send = false;
-    if (m_state == Deactivating || m_error_message_received || m_suspended) {
+    if ((m_state == Deactivating || m_error_message_received || m_suspended) && !m_error_to_send) {
         // Deactivation has been initiated. If the UNBIND message has not been
         // sent yet, there is no point in sending it. Instead, we can let the
         // deactivation process complete.
@@ -2147,7 +2148,7 @@ void Session::send_unbind_message()
 
 void Session::send_json_error_message()
 {
-    REALM_ASSERT_EX(m_state == Active, m_state);
+    REALM_ASSERT_EX(m_state == Active || m_state == Deactivating, m_state);
     REALM_ASSERT(m_ident_message_sent);
     REALM_ASSERT(!m_unbind_message_sent);
     REALM_ASSERT(m_error_to_send);

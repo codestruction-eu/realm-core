@@ -2605,7 +2605,14 @@ TEST_CASE("flx: bootstrap batching prevents orphan documents", "[sync][flx][boot
         });
     };
 
-    SECTION("exception occurs during bootstrap application") {
+    SECTION("unknown exception occurs during bootstrap application on session startup") {
+        struct NovelException : public std::exception {
+            const char* what() const noexcept override
+            {
+                return "Oh no, a really weird exception happened!";
+            }
+        };
+
         {
             auto [interrupted_promise, interrupted] = util::make_promise_future<void>();
             Realm::Config config = interrupted_realm_config;
@@ -2660,6 +2667,90 @@ TEST_CASE("flx: bootstrap batching prevents orphan documents", "[sync][flx][boot
             check_interrupted_state(realm);
         }
 
+        auto error_pf = util::make_promise_future<SyncError>();
+        interrupted_realm_config.sync_config->error_handler =
+            [promise = std::make_shared<util::Promise<SyncError>>(std::move(error_pf.promise))](
+                std::shared_ptr<SyncSession>, SyncError error) {
+                promise->emplace_value(std::move(error));
+            };
+
+        interrupted_realm_config.sync_config->on_sync_client_event_hook =
+            [&, download_message_received = false](std::weak_ptr<SyncSession>,
+                                                   const SyncClientHookData& data) mutable {
+                if (data.event == SyncClientHookEvent::DownloadMessageReceived) {
+                    download_message_received = true;
+                }
+                if (data.event != SyncClientHookEvent::BootstrapBatchAboutToProcess) {
+                    return SyncClientHookAction::NoAction;
+                }
+
+                REQUIRE(!download_message_received);
+                throw NovelException{};
+                return SyncClientHookAction::NoAction;
+            };
+
+        auto realm = Realm::get_shared_realm(interrupted_realm_config);
+        const auto& error = error_pf.future.get();
+        REQUIRE(!error.is_fatal);
+        REQUIRE(error.server_requests_action == sync::ProtocolErrorInfo::Action::Warning);
+        REQUIRE(error.status == ErrorCodes::UnknownError);
+    }
+
+    SECTION("exception occurs during bootstrap application") {
+        {
+            auto [interrupted_promise, interrupted] = util::make_promise_future<void>();
+            Realm::Config config = interrupted_realm_config;
+            config.sync_config = std::make_shared<SyncConfig>(*interrupted_realm_config.sync_config);
+            auto shared_promise = std::make_shared<util::Promise<void>>(std::move(interrupted_promise));
+            config.sync_config->on_sync_client_event_hook =
+                [promise = std::move(shared_promise)](std::weak_ptr<SyncSession> weak_session,
+                                                      const SyncClientHookData& data) mutable {
+                    if (data.event != SyncClientHookEvent::BootstrapMessageProcessed) {
+                        return SyncClientHookAction::NoAction;
+                    }
+                    auto session = weak_session.lock();
+                    if (!session) {
+                        return SyncClientHookAction::NoAction;
+                    }
+
+                    if (data.query_version == 1 && data.batch_state == sync::DownloadBatchState::LastInBatch) {
+                        session->close();
+                        promise->emplace_value();
+                        return SyncClientHookAction::EarlyReturn;
+                    }
+                    return SyncClientHookAction::NoAction;
+                };
+            auto realm = Realm::get_shared_realm(config);
+            {
+                auto mut_subs = realm->get_latest_subscription_set().make_mutable_copy();
+                auto table = realm->read_group().get_table("class_TopLevel");
+                mut_subs.insert_or_assign(Query(table));
+                mut_subs.commit();
+            }
+
+            interrupted.get();
+            realm->sync_session()->shutdown_and_wait();
+            realm->close();
+        }
+
+        _impl::RealmCoordinator::assert_no_open_realms();
+
+        // Open up the realm without the sync client attached and verify that the realm got interrupted in the state
+        // we expected it to be in.
+        {
+            DBOptions options;
+            options.encryption_key = test_util::crypt_key();
+            auto realm = DB::create(sync::make_client_replication(), interrupted_realm_config.path, options);
+            util::StderrLogger logger;
+            sync::PendingBootstrapStore bootstrap_store(realm, logger);
+            REQUIRE(bootstrap_store.has_pending());
+            auto pending_batch = bootstrap_store.peek_pending(1024 * 1024 * 16);
+            REQUIRE(pending_batch.query_version == 1);
+            REQUIRE(pending_batch.progress);
+
+            check_interrupted_state(realm);
+        }
+
         interrupted_realm_config.sync_config->simulate_integration_error = true;
         auto error_pf = util::make_promise_future<SyncError>();
         interrupted_realm_config.sync_config->error_handler =
@@ -2670,8 +2761,9 @@ TEST_CASE("flx: bootstrap batching prevents orphan documents", "[sync][flx][boot
 
         auto realm = Realm::get_shared_realm(interrupted_realm_config);
         const auto& error = error_pf.future.get();
-        REQUIRE(error.is_fatal);
+        REQUIRE(!error.is_fatal);
         REQUIRE(error.status == ErrorCodes::BadChangeset);
+        REQUIRE(error.server_requests_action == sync::ProtocolErrorInfo::Action::Warning);
     }
 
     SECTION("interrupted before final bootstrap message") {
