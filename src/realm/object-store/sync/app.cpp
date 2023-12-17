@@ -638,11 +638,10 @@ void App::get_profile(const std::shared_ptr<SyncUser>& sync_user,
                 auto identities_json = get<BsonArray>(profile_json, "identities");
 
                 std::vector<SyncUserIdentity> identities;
-                identities.reserve(profile_json.size());
+                identities.reserve(identities_json.size());
                 for (auto& identity_json : identities_json) {
                     auto doc = as<BsonDocument>(identity_json);
-                    identities.push_back(
-                        SyncUserIdentity(get<std::string>(doc, "id"), get<std::string>(doc, "provider_type")));
+                    identities.push_back({get<std::string>(doc, "id"), get<std::string>(doc, "provider_type")});
                 }
 
                 sync_user->update_user_profile(std::move(identities),
