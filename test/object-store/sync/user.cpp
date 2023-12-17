@@ -185,15 +185,15 @@ TEST_CASE("sync_user: user persistence", "[sync][user]") {
     SyncMetadataManager manager(file_manager.metadata_path(), false);
 
     SECTION("properly persists a user's information upon creation") {
-        const std::string identity = "test_identity_1";
+        const std::string user_id = "test_identity_1";
         const std::string refresh_token = ENCODE_FAKE_JWT("r-token-1");
         const std::string access_token = ENCODE_FAKE_JWT("a-token-1");
         const std::vector<SyncUserIdentity> identities{{"12345", "test_case_provider"}};
-        auto user = backing_store->get_user(identity, refresh_token, access_token, dummy_device_id);
+        auto user = backing_store->get_user(user_id, refresh_token, access_token, dummy_device_id);
         user->update_user_profile(identities, {});
         // Now try to pull the user out of the shadow manager directly.
-        auto metadata = manager.get_or_make_user_metadata(identity, false);
-        REQUIRE((bool)metadata);
+        auto metadata = manager.get_user_metadata(user_id);
+        REQUIRE(metadata);
         REQUIRE(metadata->is_valid());
         REQUIRE(metadata->access_token() == access_token);
         REQUIRE(metadata->refresh_token() == refresh_token);
@@ -202,16 +202,16 @@ TEST_CASE("sync_user: user persistence", "[sync][user]") {
     }
 
     SECTION("properly removes a user's access/refresh token upon log out") {
-        const std::string identity = "test_identity_1";
+        const std::string user_id = "test_identity_1";
         const std::string refresh_token = ENCODE_FAKE_JWT("r-token-1");
         const std::string access_token = ENCODE_FAKE_JWT("a-token-1");
         const std::vector<SyncUserIdentity> identities{{"12345", "test_case_provider"}};
-        auto user = backing_store->get_user(identity, refresh_token, access_token, dummy_device_id);
+        auto user = backing_store->get_user(user_id, refresh_token, access_token, dummy_device_id);
         user->update_user_profile(identities, {});
         user->log_out();
         // Now try to pull the user out of the shadow manager directly.
-        auto metadata = manager.get_or_make_user_metadata(identity, false);
-        REQUIRE((bool)metadata);
+        auto metadata = manager.get_user_metadata(user_id);
+        REQUIRE(metadata);
         REQUIRE(metadata->is_valid());
         REQUIRE(metadata->access_token() == "");
         REQUIRE(metadata->refresh_token() == "");
@@ -222,18 +222,18 @@ TEST_CASE("sync_user: user persistence", "[sync][user]") {
     }
 
     SECTION("properly persists a user's information when the user is updated") {
-        const std::string identity = "test_identity_2";
+        const std::string user_id = "test_identity_2";
         const std::string refresh_token = ENCODE_FAKE_JWT("r_token-2a");
         const std::string access_token = ENCODE_FAKE_JWT("a_token-1a");
         // Create the user and validate it.
-        auto first = backing_store->get_user(identity, refresh_token, access_token, dummy_device_id);
-        auto first_metadata = manager.get_or_make_user_metadata(identity, false);
+        auto first = backing_store->get_user(user_id, refresh_token, access_token, dummy_device_id);
+        auto first_metadata = manager.get_user_metadata(user_id);
         REQUIRE(first_metadata->is_valid());
         REQUIRE(first_metadata->access_token() == access_token);
         const std::string token_2 = ENCODE_FAKE_JWT("token-2b");
         // Update the user.
-        auto second = backing_store->get_user(identity, refresh_token, token_2, dummy_device_id);
-        auto second_metadata = manager.get_or_make_user_metadata(identity, false);
+        auto second = backing_store->get_user(user_id, refresh_token, token_2, dummy_device_id);
+        auto second_metadata = manager.get_user_metadata(user_id);
         REQUIRE(second_metadata->is_valid());
         REQUIRE(second_metadata->access_token() == token_2);
     }

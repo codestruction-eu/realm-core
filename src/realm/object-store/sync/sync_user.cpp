@@ -123,10 +123,10 @@ SyncUser::SyncUser(Private, std::string_view refresh_token, std::string_view id,
     lock_or_throw(m_app)->backing_store()->perform_metadata_update(
         [&](const auto& manager) NO_THREAD_SAFETY_ANALYSIS {
             auto metadata = manager.get_or_make_user_metadata(m_user_id);
-            metadata->set_state_and_tokens(State::LoggedIn, m_access_token.token, m_refresh_token.token);
-            metadata->set_device_id(m_device_id);
-            m_legacy_identities = metadata->legacy_identities();
-            this->m_user_profile = metadata->profile();
+            metadata.set_state_and_tokens(State::LoggedIn, m_access_token.token, m_refresh_token.token);
+            metadata.set_device_id(m_device_id);
+            m_legacy_identities = metadata.legacy_identities();
+            this->m_user_profile = metadata.profile();
         });
 }
 
@@ -190,7 +190,7 @@ void SyncUser::log_in(std::string_view access_token, std::string_view refresh_to
 
         lock_or_throw(m_app)->backing_store()->perform_metadata_update([&](const auto& manager) {
             auto metadata = manager.get_or_make_user_metadata(m_user_id);
-            metadata->set_state_and_tokens(State::LoggedIn, access_token, refresh_token);
+            metadata.set_state_and_tokens(State::LoggedIn, access_token, refresh_token);
         });
     }
 #if REALM_ENABLE_SYNC
@@ -218,7 +218,7 @@ void SyncUser::invalidate()
 
         lock_or_throw(m_app)->backing_store()->perform_metadata_update([&](const auto& manager) {
             auto metadata = manager.get_or_make_user_metadata(m_user_id);
-            metadata->set_state_and_tokens(State::Removed, "", "");
+            metadata.set_state_and_tokens(State::Removed, "", "");
         });
     }
     emit_change_to_subscribers(*this);
@@ -236,7 +236,7 @@ void SyncUser::update_access_token(std::string&& token)
         lock_or_throw(m_app)->backing_store()->perform_metadata_update(
             [&, raw_access_token = m_access_token.token](const auto& manager) {
                 auto metadata = manager.get_or_make_user_metadata(m_user_id);
-                metadata->set_access_token(raw_access_token);
+                metadata.set_access_token(raw_access_token);
             });
     }
 
@@ -274,15 +274,14 @@ void SyncUser::log_out()
             // Mark the user as 'dead' in the persisted metadata Realm.
             m_state = State::Removed;
             app->backing_store()->perform_metadata_update([&](const auto& manager) {
-                auto metadata = manager.get_or_make_user_metadata(m_user_id, false);
-                if (metadata)
+                if (auto metadata = manager.get_user_metadata(m_user_id))
                     metadata->remove();
             });
         }
         else {
             app->backing_store()->perform_metadata_update([&](const auto& manager) {
                 auto metadata = manager.get_or_make_user_metadata(m_user_id);
-                metadata->set_state_and_tokens(State::LoggedOut, "", "");
+                metadata.set_state_and_tokens(State::LoggedOut, "", "");
             });
         }
     }
@@ -373,8 +372,8 @@ void SyncUser::update_user_profile(std::vector<SyncUserIdentity> identities, Syn
     lock_or_throw(m_app)->backing_store()->perform_metadata_update(
         [&](const auto& manager) NO_THREAD_SAFETY_ANALYSIS {
             auto metadata = manager.get_or_make_user_metadata(m_user_id);
-            metadata->set_identities(m_user_identities);
-            metadata->set_user_profile(m_user_profile);
+            metadata.set_identities(m_user_identities);
+            metadata.set_user_profile(m_user_profile);
         });
 }
 

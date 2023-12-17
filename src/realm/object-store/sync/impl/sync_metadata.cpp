@@ -323,59 +323,75 @@ void SyncMetadataManager::set_current_user_id(std::string_view user_id)
     realm->commit_transaction();
 }
 
-util::Optional<SyncUserMetadata> SyncMetadataManager::get_or_make_user_metadata(std::string_view user_id,
-                                                                                bool make_if_absent) const
+Query SyncMetadataManager::find_user(Realm& realm, StringData user_id) const
+{
+    return ObjectStore::table_for_object_type(realm.read_group(), c_sync_userMetadata)
+        ->where()
+        .equal(m_user_schema.user_id_col, user_id);
+}
+
+SyncUserMetadata SyncMetadataManager::get_or_make_user_metadata(std::string_view user_id) const
 {
     auto realm = get_realm();
     auto& schema = m_user_schema;
+    Query query = find_user(*realm, user_id);
+    REALM_ASSERT_DEBUG(query.count() < 2);
+    auto table = query.get_table().cast_away_const();
+    auto key = query.find();
 
-    // Retrieve or create the row for this object.
-    TableRef table = ObjectStore::table_for_object_type(realm->read_group(), c_sync_userMetadata);
-    Query query = table->where().equal(schema.user_id_col, StringData(user_id));
-    Results results(realm, std::move(query));
-    REALM_ASSERT_DEBUG(results.size() < 2);
-    auto obj = results.first();
-
-    if (!obj) {
-        if (!make_if_absent)
-            return none;
-
+    if (!key) {
         realm->begin_transaction();
-        // Check the results again.
-        obj = results.first();
+        // Beginning the write refreshes the Realm, so check again
+        key = query.find();
     }
-    if (!obj) {
-        // Because "making this user" is our last action, set this new user as the current user
-        TableRef current_user_table = ObjectStore::table_for_object_type(realm->read_group(), c_sync_current_user_id);
+    if (!key) {
+        if (!realm->is_in_transaction())
+            realm->begin_transaction();
 
+        auto obj = table->create_object();
+        obj.set<String>(schema.user_id_col, user_id);
+        obj.set(schema.state_col, (int64_t)SyncUser::State::LoggedIn);
+
+        // Mark the user we just created as the current user
+        TableRef current_user_table = ObjectStore::table_for_object_type(realm->read_group(), c_sync_current_user_id);
         Obj current_user_obj;
         if (current_user_table->is_empty())
             current_user_obj = current_user_table->create_object();
         else
             current_user_obj = *current_user_table->begin();
-        current_user_obj.set<String>(c_sync_current_user_id, StringData(user_id));
+        current_user_obj.set<String>(c_sync_current_user_id, user_id);
 
-        auto obj = table->create_object();
-        obj.set(schema.user_id_col, StringData(user_id));
-        obj.set(schema.state_col, (int64_t)SyncUser::State::LoggedIn);
         realm->commit_transaction();
         return SyncUserMetadata(schema, std::move(realm), obj);
     }
 
     // Got an existing user.
-    if (obj->get<int64_t>(schema.state_col) == int64_t(SyncUser::State::Removed)) {
-        // User is dead. Revive or return none.
-        if (!make_if_absent) {
-            return none;
-        }
-
-        if (!realm->is_in_transaction())
-            realm->begin_transaction();
-        obj->set(schema.state_col, (int64_t)SyncUser::State::LoggedIn);
+    Obj obj = table->get_object(key);
+    if (obj.get<int64_t>(schema.state_col) == int64_t(SyncUser::State::Removed)) {
+        realm->begin_transaction();
+        obj.set(schema.state_col, (int64_t)SyncUser::State::LoggedIn);
         realm->commit_transaction();
     }
 
-    return SyncUserMetadata(schema, std::move(realm), std::move(*obj));
+    return SyncUserMetadata(schema, std::move(realm), obj);
+}
+
+std::optional<SyncUserMetadata> SyncMetadataManager::get_user_metadata(std::string_view user_id) const
+{
+    auto realm = get_realm();
+    auto query = find_user(*realm, user_id);
+    auto key = query.find();
+    if (!key) {
+        return none;
+    }
+
+    auto table = query.get_table().cast_away_const();
+    Obj obj = table->get_object(key);
+    if (obj.get<int64_t>(m_user_schema.state_col) == int64_t(SyncUser::State::Removed)) {
+        return none;
+    }
+
+    return SyncUserMetadata(m_user_schema, std::move(realm), obj);
 }
 
 void SyncMetadataManager::make_file_action_metadata(StringData original_name, StringData partition_key_value,
@@ -419,9 +435,7 @@ util::Optional<SyncFileActionMetadata> SyncMetadataManager::get_file_action_meta
 
 std::shared_ptr<Realm> SyncMetadataManager::get_realm() const
 {
-    auto realm = Realm::get_shared_realm(m_metadata_config);
-    realm->refresh();
-    return realm;
+    return Realm::get_shared_realm(m_metadata_config);
 }
 
 std::shared_ptr<Realm> SyncMetadataManager::try_get_realm() const

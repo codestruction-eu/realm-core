@@ -414,7 +414,7 @@ std::string RealmBackingStore::path_for_realm(std::shared_ptr<SyncUser> user,
     // Report the use of a Realm for this user, so the metadata can track it for clean up.
     perform_metadata_update([&](const auto& manager) {
         auto metadata = manager.get_or_make_user_metadata(user->user_id());
-        metadata->add_realm_file_path(path);
+        metadata.add_realm_file_path(path);
     });
     return path;
 }

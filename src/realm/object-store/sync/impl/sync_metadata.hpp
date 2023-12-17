@@ -219,8 +219,8 @@ public:
 
     // Retrieve or create user metadata.
     // Note: if `make_is_absent` is true and the user has been marked for deletion, it will be unmarked.
-    util::Optional<SyncUserMetadata> get_or_make_user_metadata(std::string_view user_id,
-                                                               bool make_if_absent = true) const;
+    SyncUserMetadata get_or_make_user_metadata(std::string_view user_id) const;
+    std::optional<SyncUserMetadata> get_user_metadata(std::string_view user_id) const;
 
     // Retrieve file action metadata.
     util::Optional<SyncFileActionMetadata> get_file_action_metadata(StringData path) const;
@@ -261,7 +261,7 @@ private:
     std::shared_ptr<Realm> get_realm() const;
     std::shared_ptr<Realm> try_get_realm() const;
     std::shared_ptr<Realm> open_realm(bool should_encrypt, bool caller_supplied_key);
-
+    Query find_user(Realm& realm, StringData user_id) const;
 
     util::Optional<SyncAppMetadata> m_app_metadata;
 };

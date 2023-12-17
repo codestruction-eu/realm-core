@@ -307,17 +307,17 @@ TEST_CASE("RealmBackingStore: persistent user state management", "[sync][backing
         const std::string identity_3 = "baz-1";
         // First, create a few users and add them to the metadata.
         auto u1 = manager.get_or_make_user_metadata(identity_1);
-        u1->set_access_token(a_token_1);
-        u1->set_refresh_token(r_token_1);
-        u1->set_device_id(dummy_device_id);
+        u1.set_access_token(a_token_1);
+        u1.set_refresh_token(r_token_1);
+        u1.set_device_id(dummy_device_id);
         auto u2 = manager.get_or_make_user_metadata(identity_2);
-        u2->set_access_token(a_token_2);
-        u2->set_refresh_token(r_token_2);
-        u2->set_device_id(dummy_device_id);
+        u2.set_access_token(a_token_2);
+        u2.set_refresh_token(r_token_2);
+        u2.set_device_id(dummy_device_id);
         auto u3 = manager.get_or_make_user_metadata(identity_3);
-        u3->set_access_token(a_token_3);
-        u3->set_refresh_token(r_token_3);
-        u3->set_device_id(dummy_device_id);
+        u3.set_access_token(a_token_3);
+        u3.set_refresh_token(r_token_3);
+        u3.set_device_id(dummy_device_id);
         // The fourth user is an "invalid" user: no token, so shouldn't show up.
         auto u_invalid = manager.get_or_make_user_metadata("invalid_user");
         REQUIRE(manager.all_unmarked_users().size() == 4);
@@ -359,13 +359,13 @@ TEST_CASE("RealmBackingStore: persistent user state management", "[sync][backing
         // Don't mark this user for deletion.
         auto u3 = manager.get_or_make_user_metadata(identity_3);
 
-        u1->set_legacy_identities({"legacy1"});
-        u2->set_legacy_identities({"legacy2"});
-        u3->set_legacy_identities({"legacy3"});
+        u1.set_legacy_identities({"legacy1"});
+        u2.set_legacy_identities({"legacy2"});
+        u3.set_legacy_identities({"legacy3"});
 
         {
             auto expected_u1_path = [&](const bson::Bson& partition) {
-                return ExpectedRealmPaths(tsm.base_file_path(), app_id, u1->user_id(), u1->legacy_identities(),
+                return ExpectedRealmPaths(tsm.base_file_path(), app_id, u1.user_id(), u1.legacy_identities(),
                                           partition.to_string());
             };
             bson::Bson partition = "partition1";
@@ -398,9 +398,9 @@ TEST_CASE("RealmBackingStore: persistent user state management", "[sync][backing
             auto backing_store = tsm.app()->backing_store();
 
             // Pre-populate the user directories.
-            auto user1 = backing_store->get_user(u1->user_id(), r_token_1, a_token_1, dummy_device_id);
-            auto user2 = backing_store->get_user(u2->user_id(), r_token_2, a_token_2, dummy_device_id);
-            auto user3 = backing_store->get_user(u3->user_id(), r_token_3, a_token_3, dummy_device_id);
+            auto user1 = backing_store->get_user(u1.user_id(), r_token_1, a_token_1, dummy_device_id);
+            auto user2 = backing_store->get_user(u2.user_id(), r_token_2, a_token_2, dummy_device_id);
+            auto user3 = backing_store->get_user(u3.user_id(), r_token_3, a_token_3, dummy_device_id);
             for (auto& dir : dirs_to_create) {
                 try_make_dir(dir);
             }
@@ -430,8 +430,8 @@ TEST_CASE("RealmBackingStore: persistent user state management", "[sync][backing
             for (auto& path : paths) {
                 create_dummy_realm(path);
             }
-            backing_store->remove_user(u1->user_id());
-            backing_store->remove_user(u2->user_id());
+            backing_store->remove_user(u1.user_id());
+            backing_store->remove_user(u2.user_id());
         }
         for (auto& path : paths) {
             REQUIRE_REALM_EXISTS(path);
