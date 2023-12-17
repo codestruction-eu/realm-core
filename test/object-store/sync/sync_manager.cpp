@@ -43,7 +43,7 @@ bool validate_user_in_vector(std::vector<std::shared_ptr<SyncUser>> vector, cons
                              const std::string& device_id)
 {
     for (auto& user : vector) {
-        if (user->identity() == identity && user->refresh_token() == refresh_token &&
+        if (user->user_id() == identity && user->refresh_token() == refresh_token &&
             user->access_token() == access_token && user->has_device_id() && user->device_id() == device_id) {
             return true;
         }
@@ -66,12 +66,12 @@ TEST_CASE("RealmBackingStore: `path_for_realm` API", "[sync][backing store]") {
     SECTION("should work properly without metadata") {
         TestSyncManager tsm(SyncManager::MetadataMode::NoMetadata);
         auto backing_store = tsm.app()->backing_store();
-        const std::string identity = random_string(10);
-        auto base_path = fs::path{tsm.base_file_path()}.make_preferred() / "mongodb-realm" / "app_id" / identity;
+        const std::string user_id = random_string(10);
+        auto base_path = fs::path{tsm.base_file_path()}.make_preferred() / "mongodb-realm" / "app_id" / user_id;
         const auto expected = base_path / "realms%3A%2F%2Frealm.example.org%2Fa%2Fb%2F%7E%2F123456%2Fxyz.realm";
-        auto user = backing_store->get_user(identity, ENCODE_FAKE_JWT("dummy_token"),
+        auto user = backing_store->get_user(user_id, ENCODE_FAKE_JWT("dummy_token"),
                                             ENCODE_FAKE_JWT("not_a_real_token"), dummy_device_id);
-        REQUIRE(user->identity() == identity);
+        REQUIRE(user->user_id() == user_id);
         SyncConfig config(user, bson::Bson{});
         std::optional<std::string> partition =
             config.flx_sync_requested ? none : std::make_optional(config.partition_value);
@@ -83,12 +83,12 @@ TEST_CASE("RealmBackingStore: `path_for_realm` API", "[sync][backing store]") {
     SECTION("should work properly with metadata") {
         TestSyncManager tsm(SyncManager::MetadataMode::NoEncryption);
         auto backing_store = tsm.app()->backing_store();
-        const std::string identity = random_string(10);
-        auto base_path = fs::path{tsm.base_file_path()}.make_preferred() / "mongodb-realm" / "app_id" / identity;
+        const std::string user_id = random_string(10);
+        auto base_path = fs::path{tsm.base_file_path()}.make_preferred() / "mongodb-realm" / "app_id" / user_id;
         const auto expected = base_path / "realms%3A%2F%2Frealm.example.org%2Fa%2Fb%2F%7E%2F123456%2Fxyz.realm";
-        auto user = backing_store->get_user(identity, ENCODE_FAKE_JWT("dummy_token"),
+        auto user = backing_store->get_user(user_id, ENCODE_FAKE_JWT("dummy_token"),
                                             ENCODE_FAKE_JWT("not_a_real_token"), dummy_device_id);
-        REQUIRE(user->identity() == identity);
+        REQUIRE(user->user_id() == user_id);
         SyncConfig config(user, bson::Bson{});
         std::optional<std::string> partition =
             config.flx_sync_requested ? none : std::make_optional(config.partition_value);
@@ -365,7 +365,7 @@ TEST_CASE("RealmBackingStore: persistent user state management", "[sync][backing
 
         {
             auto expected_u1_path = [&](const bson::Bson& partition) {
-                return ExpectedRealmPaths(tsm.base_file_path(), app_id, u1->identity(), u1->legacy_identities(),
+                return ExpectedRealmPaths(tsm.base_file_path(), app_id, u1->user_id(), u1->legacy_identities(),
                                           partition.to_string());
             };
             bson::Bson partition = "partition1";
@@ -398,9 +398,9 @@ TEST_CASE("RealmBackingStore: persistent user state management", "[sync][backing
             auto backing_store = tsm.app()->backing_store();
 
             // Pre-populate the user directories.
-            auto user1 = backing_store->get_user(u1->identity(), r_token_1, a_token_1, dummy_device_id);
-            auto user2 = backing_store->get_user(u2->identity(), r_token_2, a_token_2, dummy_device_id);
-            auto user3 = backing_store->get_user(u3->identity(), r_token_3, a_token_3, dummy_device_id);
+            auto user1 = backing_store->get_user(u1->user_id(), r_token_1, a_token_1, dummy_device_id);
+            auto user2 = backing_store->get_user(u2->user_id(), r_token_2, a_token_2, dummy_device_id);
+            auto user3 = backing_store->get_user(u3->user_id(), r_token_3, a_token_3, dummy_device_id);
             for (auto& dir : dirs_to_create) {
                 try_make_dir(dir);
             }
@@ -430,8 +430,8 @@ TEST_CASE("RealmBackingStore: persistent user state management", "[sync][backing
             for (auto& path : paths) {
                 create_dummy_realm(path);
             }
-            backing_store->remove_user(u1->identity());
-            backing_store->remove_user(u2->identity());
+            backing_store->remove_user(u1->user_id());
+            backing_store->remove_user(u2->user_id());
         }
         for (auto& path : paths) {
             REQUIRE_REALM_EXISTS(path);
