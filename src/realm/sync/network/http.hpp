@@ -50,6 +50,9 @@ struct is_error_code_enum<realm::sync::HTTPParserError> : std::true_type {
 } // namespace std
 
 namespace realm::sync {
+namespace websocket {
+class Config;
+}
 
 /// See: https://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
 ///
@@ -338,27 +341,28 @@ struct HTTPParser : protected HTTPParserBase {
             };
             m_socket.async_read(m_read_buffer.get(), *m_found_content_length, std::move(handler));
         } else if (m_has_chunked_encoding) {
-            auto body_size_handler = [&](std::error_code ec, size_t n) {
-                if (ec == util::error::operation_aborted) {
-                    on_complete(ec);
-                    return;
+            if constexpr (!std::is_base_of_v<sync::websocket::Config, Socket>) {
+                bool end_found = false;
+                std::stringstream ss;
+                std::error_code ec;
+                while (!end_found) {
+                    auto res = m_socket.read_util(m_read_buffer.get(), 8, '\n', ec);
+                    REALM_ASSERT(ec != util::error::operation_aborted);
+                    if  (res == 2 && StringData(m_read_buffer.get(), res) == "\r\n") {
+                        end_found = true;
+                        break;
+                    }
+                    auto chunk_size = hex_to_int(StringData(m_read_buffer.get(), res));
+                    m_socket.read_util(m_read_buffer.get(), chunk_size, '\n', ec);
+                    REALM_ASSERT(ec != util::error::operation_aborted);
+                    auto chunk_data = StringData(m_read_buffer.get(), chunk_size);
+                    ss << chunk_data;
                 }
-                if (!ec) {
-                    auto body_handler = [this](std::error_code ec, size_t n) {
-                        if (ec == util::error::operation_aborted) {
-                            on_complete(ec);
-                            return;
-                        }
-                        on_body(StringData(m_read_buffer.get(), n));
-                        on_complete(ec);
-                    };
-
-                    m_socket.async_read(m_read_buffer.get(), hex_to_int(StringData(m_read_buffer.get(), n)),
-                                        std::move(body_handler));
-                }
-            };
-            // 8 should be plenty to extract the hex value for getting the size of the body
-            m_socket.async_read_until(m_read_buffer.get(), 8, '\n', std::move(body_size_handler));
+                on_body(ss.str());
+                on_complete(ec);
+            } else {
+                REALM_TERMINATE("Socket does not implement `read_util`");
+            }
         } else {
             // No body, just finish.
             on_complete();
