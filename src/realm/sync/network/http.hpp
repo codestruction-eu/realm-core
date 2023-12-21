@@ -24,6 +24,7 @@
 #include <system_error>
 #include <iosfwd>
 #include <locale>
+#include <sstream>
 
 #include <realm/util/optional.hpp>
 #include <realm/util/basic_system_errors.hpp>
@@ -124,6 +125,7 @@ enum class HTTPMethod {
     Head,
     Post,
     Put,
+    Patch,
     Delete,
     Trace,
     Connect,
@@ -218,6 +220,7 @@ struct HTTPParserBase {
     std::string m_write_buffer;
     std::unique_ptr<char[], CallocDeleter> m_read_buffer;
     util::Optional<size_t> m_found_content_length;
+    bool m_has_chunked_encoding = false;
     static const size_t read_buffer_size = 8192;
     static const size_t max_header_line_length = read_buffer_size;
 
@@ -306,6 +309,14 @@ struct HTTPParser : protected HTTPParserBase {
         m_socket.async_read_until(m_read_buffer.get(), max_header_line_length, '\n', std::move(handler));
     }
 
+    inline uint32_t hex_to_int(const std::string &hex ) throw() {
+        uint32_t dec;
+        std::stringstream ss;
+        ss << std::hex << hex;
+        ss >> dec;
+        return dec;
+    }
+
     void read_body()
     {
         if (m_found_content_length) {
@@ -326,8 +337,29 @@ struct HTTPParser : protected HTTPParserBase {
                 on_complete(ec);
             };
             m_socket.async_read(m_read_buffer.get(), *m_found_content_length, std::move(handler));
-        }
-        else {
+        } else if (m_has_chunked_encoding) {
+            auto body_size_handler = [&](std::error_code ec, size_t n) {
+                if (ec == util::error::operation_aborted) {
+                    on_complete(ec);
+                    return;
+                }
+                if (!ec) {
+                    auto body_handler = [this](std::error_code ec, size_t n) {
+                        if (ec == util::error::operation_aborted) {
+                            on_complete(ec);
+                            return;
+                        }
+                        on_body(StringData(m_read_buffer.get(), n));
+                        on_complete(ec);
+                    };
+
+                    m_socket.async_read(m_read_buffer.get(), hex_to_int(StringData(m_read_buffer.get(), n)),
+                                        std::move(body_handler));
+                }
+            };
+            // 8 should be plenty to extract the hex value for getting the size of the body
+            m_socket.async_read_until(m_read_buffer.get(), 8, '\n', std::move(body_size_handler));
+        } else {
             // No body, just finish.
             on_complete();
         }
