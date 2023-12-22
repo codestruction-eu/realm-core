@@ -346,13 +346,14 @@ struct HTTPParser : protected HTTPParserBase {
                 std::stringstream ss;
                 std::error_code ec;
                 while (!end_found) {
-                    auto res = m_socket.read_util(m_read_buffer.get(), 8, '\n', ec);
+                    auto res = m_socket.read_util(m_read_buffer.get(), 8, '\r\n', ec);
                     REALM_ASSERT(ec != util::error::operation_aborted);
-                    if  (res == 2 && StringData(m_read_buffer.get(), res) == "\r\n") {
+                    auto chunk_size = hex_to_int(StringData(m_read_buffer.get(), res)) + res;
+
+                    if  (StringData(m_read_buffer.get(), res) == "0\r\n") {
                         end_found = true;
                         break;
                     }
-                    auto chunk_size = hex_to_int(StringData(m_read_buffer.get(), res));
                     m_socket.read_util(m_read_buffer.get(), chunk_size, '\n', ec);
                     REALM_ASSERT(ec != util::error::operation_aborted);
                     auto chunk_data = StringData(m_read_buffer.get(), chunk_size);
