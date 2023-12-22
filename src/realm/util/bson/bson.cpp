@@ -21,6 +21,7 @@
 #include <external/json/json.hpp>
 #include <sstream>
 #include <algorithm>
+#include <charconv>
 
 namespace realm {
 namespace bson {
@@ -333,13 +334,13 @@ bool holds_alternative<MaxKey>(const Bson& bson)
 }
 
 template <>
-bool holds_alternative<IndexedMap<Bson>>(const Bson& bson)
+bool holds_alternative<BsonDocument>(const Bson& bson)
 {
     return bson.m_type == Bson::Type::Document;
 }
 
 template <>
-bool holds_alternative<std::vector<Bson>>(const Bson& bson)
+bool holds_alternative<BsonArray>(const Bson& bson)
 {
     return bson.m_type == Bson::Type::Array;
 }
@@ -371,6 +372,89 @@ struct PrecisionGuard {
     std::ostream& stream;
     std::streamsize old_precision;
 };
+
+uint32_t Bson::size() const
+{
+    switch (type()) {
+        case Bson::Type::Null:
+            return 0;
+        case Bson::Type::Int32:
+            return sizeof(int32_t);
+        case Bson::Type::Int64:
+            return sizeof(int64_t);
+        case Bson::Type::Bool:
+            return 1;
+        case Bson::Type::Double:
+            return sizeof(double);
+        case Bson::Type::String:
+            return string_val.size() + 4 + 1;
+        case Bson::Type::Binary:
+            return binary_val.size() + 4 + 1;
+        case Bson::Type::Datetime:
+        case Bson::Type::Timestamp:
+            return sizeof(uint64_t);
+        case Bson::Type::ObjectId:
+            return sizeof(ObjectId);
+        case Bson::Type::Decimal128:
+            return sizeof(Decimal128);
+        case Bson::Type::RegularExpression:
+            return 0; // TODO: Implement
+        case Bson::Type::MinKey:
+        case Bson::Type::MaxKey:
+            return 0;
+        case Bson::Type::Document:
+            return document_val->length();
+        case Bson::Type::Array:
+            return array_val->length();
+        case Bson::Type::Uuid:
+            return sizeof(UUID);
+    }
+    return 0;
+}
+
+void Bson::append_to(uint8_t* p) const
+{
+    switch (type()) {
+        case Bson::Type::Null:
+            break;
+        case Bson::Type::Int32:
+            *reinterpret_cast<int32_t*>(p) = int32_val;
+            break;
+        case Bson::Type::Int64:
+            *reinterpret_cast<int64_t*>(p) = int64_val;
+            break;
+        case Bson::Type::Bool:
+            *p = bool_val ? 1 : 0;
+            break;
+        case Bson::Type::Double:
+            break;
+        case Bson::Type::String:
+            strcpy(reinterpret_cast<char*>(p), string_val.c_str());
+            break;
+        case Bson::Type::Binary:
+            break;
+        case Bson::Type::Datetime:
+            break;
+        case Bson::Type::Timestamp:
+            break;
+        case Bson::Type::ObjectId:
+            break;
+        case Bson::Type::Decimal128:
+            break;
+        case Bson::Type::RegularExpression:
+            break;
+        case Bson::Type::MinKey:
+            break;
+        case Bson::Type::MaxKey:
+            break;
+        case Bson::Type::Document:
+            break;
+        case Bson::Type::Array:
+            break;
+        case Bson::Type::Uuid:
+            break;
+    }
+}
 
 std::ostream& operator<<(std::ostream& out, const Bson& b)
 {
@@ -524,7 +608,6 @@ struct BsonError : public std::runtime_error {
     }
 };
 
-namespace {
 // This implements just enough of the map API to support nlohmann's DOM apis that we use.
 template <typename K, typename V, typename... Ignored>
 struct LinearMap {
@@ -620,9 +703,9 @@ Bson dom_elem_to_bson(const Json& json)
         case Json::value_t::object:
             return dom_obj_to_bson(json);
         case Json::value_t::array: {
-            std::vector<Bson> out;
+            BsonArray out;
             for (auto&& elem : json) {
-                out.push_back(dom_elem_to_bson(elem));
+                out.append(dom_elem_to_bson(elem));
             }
             return Bson(std::move(out));
         }
@@ -787,17 +870,253 @@ Bson dom_obj_to_bson(const Json& json)
 
     BsonDocument out;
     for (auto&& [k, v] : json.items()) {
-        out[k] = dom_elem_to_bson(v);
+        out.append(k, dom_elem_to_bson(v));
     }
     return out;
 }
-} // namespace
 
-} // anonymous namespace
+size_t next_power_of_two (size_t v)
+{
+   v--;
+   v |= v >> 1;
+   v |= v >> 2;
+   v |= v >> 4;
+   v |= v >> 8;
+   v |= v >> 16;
+   if constexpr (sizeof(v) == 8) {
+       v |= v >> 32;
+   }
+   v++;
+
+   return v;
+}
+} // namespace
 
 Bson parse(const std::string_view& json)
 {
     return dom_elem_to_bson(Json::parse(json));
+}
+
+
+BsonDocument::BsonDocument(std::initializer_list<entry> entries)
+{
+    init();
+    for (auto& e : entries) {
+        append(e.first, e.second);
+    }
+}
+
+BsonDocument::~BsonDocument()
+{
+
+    if (!(flags & (BSON_FLAG_RDONLY | BSON_FLAG_INLINE | BSON_FLAG_NO_FREE))) {
+       free(*impl_alloc.buf);
+    }
+}
+
+BsonDocument::BsonDocument(const BsonDocument& other)
+{
+    init();
+    *this == other;
+}
+
+BsonDocument& BsonDocument::operator=(const BsonDocument& other)
+{
+    entries = other.entries;
+    grow(other.len);
+    len = other.len;
+    memcpy(get_data(), other.get_data(), len);
+    return *this;
+}
+
+BsonDocument::BsonDocument(BsonDocument&& from)
+{
+    init();
+    if ((from.flags & BSON_FLAG_INLINE)) {
+        memcpy(data, from.data, len);
+    }
+    else {
+        flags = from.flags;
+        impl_alloc.parent = NULL;
+        impl_alloc.depth = 0;
+        impl_alloc.buf = &impl_alloc.alloc;
+        impl_alloc.buflen = &impl_alloc.alloclen;
+        impl_alloc.offset = 0;
+        impl_alloc.alloc = from.impl_alloc.alloc;
+        from.impl_alloc.alloc = nullptr;
+        impl_alloc.alloclen = from.impl_alloc.alloclen;
+    }
+    entries = std::move(from.entries);
+}
+
+void BsonDocument::init()
+{
+    flags = BSON_FLAG_INLINE | BSON_FLAG_STATIC;
+    len = 5;
+    data[0] = 5;
+    data[1] = 0;
+    data[2] = 0;
+    data[3] = 0;
+    data[4] = 0;
+}
+
+const BsonDocument::entry* BsonDocument::iterator::operator->()
+{
+    return &value;
+}
+
+
+BsonDocument::iterator& BsonDocument::iterator::operator++()
+{
+    return *this;
+}
+
+size_t BsonDocument::size() const
+{
+    return entries.size();
+}
+
+void BsonDocument::append(std::string_view key, const Bson& b)
+{
+    auto key_size = key.size();
+    auto value_size = b.size();
+    uint32_t n_bytes = 1 + key_size + 1 + value_size;
+
+    grow(n_bytes);
+
+    auto buf = get_data();
+    auto p = buf + len - 1;
+
+    // Add type
+    auto type = b.type();
+    *p++ = static_cast<uint8_t>((type == Bson::Type::Uuid) ? Bson::Type::Binary : type);
+
+    // Add key
+    char* key_str = reinterpret_cast<char*>(p);
+    memcpy(key_str, key.data(), key_size);
+    p += key_size;
+    *p++ = '\0';
+    entries.emplace_back(std::string_view(key_str, key_size), p - get_data());
+
+    // Add value
+    b.append_to(p);
+    p += value_size;
+
+    // Add terminating zero
+    *p++ = '\0';
+
+    len += n_bytes;
+    encode_length();
+}
+
+void BsonDocument::inline_grow(uint32_t sz)
+{
+    size_t req = size_t(len) + sz;
+    if (req > BSON_INLINE_DATA_SIZE) {
+        req = next_power_of_two(req);
+
+        if (req > std::numeric_limits<uint32_t>::max()) {
+            throw RuntimeError(ErrorCodes::LimitExceeded, "Bson document too large");
+        }
+
+        uint8_t* new_data = reinterpret_cast<uint8_t*>(malloc(req));
+        memcpy(new_data, data, len);
+
+        flags &= ~BSON_FLAG_INLINE;
+        impl_alloc.parent = NULL;
+        impl_alloc.depth = 0;
+        impl_alloc.buf = &impl_alloc.alloc;
+        impl_alloc.buflen = &impl_alloc.alloclen;
+        impl_alloc.offset = 0;
+        impl_alloc.alloc = new_data;
+        impl_alloc.alloclen = req;
+    }
+}
+
+void BsonDocument::alloc_grow(uint32_t sz)
+{
+    /*
+     * Determine how many bytes we need for this document in the buffer
+     * including necessary trailing bytes for parent documents.
+     */
+    size_t req = impl_alloc.offset + len + sz + impl_alloc.depth;
+
+    if (req > *impl_alloc.buflen) {
+        req = next_power_of_two(req);
+
+        if (req > std::numeric_limits<uint32_t>::max()) {
+            throw RuntimeError(ErrorCodes::LimitExceeded, "Bson document too large");
+        }
+
+        *impl_alloc.buf = reinterpret_cast<uint8_t*>(realloc(*impl_alloc.buf, req));
+        *impl_alloc.buflen = req;
+    }
+}
+
+Bson BsonDocument::at(std::string_view key) const
+{
+    auto it = find(key);
+    return it->second;
+}
+
+Bson BsonArray::operator[](size_t ndx) const
+{
+    BsonDocument::iterator it(m_doc.get_data() + m_doc.entries[ndx].second, 0);
+    return it->second;
+}
+
+BsonDocument::iterator BsonDocument::find(std::string_view k) const
+{
+    auto it = std::find_if(entries.begin(), entries.end(), [&k](const auto &e){
+        return e.first == k;
+    });
+    if (it != entries.end()) {
+        return iterator(get_data() + it->second, len);
+    }
+    return end();
+}
+
+bool BsonDocument::operator==(const BsonDocument& other) const
+{
+    if (size() != other.size())
+        return false;
+    for (auto it = begin(); it != end(); ++it) {
+        auto other_it = other.find(it->first);
+        if (other_it == other.end())
+            return false;
+        if (it->second != other_it->second)
+            return false;
+    }
+    return true;
+}
+
+BsonDocument::iterator BsonDocument::begin() const
+{
+    return {get_data(), len};
+}
+BsonDocument::iterator BsonDocument::end() const
+{
+    return {get_data() + len, 0};
+}
+
+void BsonArray::append(const Bson& b)
+{
+    auto n = m_doc.size();
+    char buffer[10];
+    std::to_chars(buffer, buffer + 10, n);
+    m_doc.append(buffer, b);
+}
+
+bool BsonArray::operator==(const BsonArray& other) const
+{
+    if (size() != other.size())
+        return false;
+    auto other_it = other.begin();
+    for (auto it = begin(); it != end(); ++it) {
+        if (*it != *other_it)
+            return false;
+    }
+    return true;
 }
 
 } // namespace bson

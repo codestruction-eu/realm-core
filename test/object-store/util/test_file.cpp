@@ -452,7 +452,7 @@ std::vector<bson::BsonDocument> TestAppSession::get_documents(SyncUser& user, co
 
     std::vector<bson::BsonDocument> documents;
     collection.find({}, {},
-                    [&](util::Optional<std::vector<bson::Bson>>&& result, util::Optional<app::AppError> error) {
+                    [&](util::Optional<bson::BsonArray>&& result, util::Optional<app::AppError> error) {
                         REQUIRE(result);
                         REQUIRE(!error);
                         REQUIRE(result->size() == expected_count);

@@ -926,6 +926,9 @@ TEST(Bson_bson)
 {
     bson_t bs[1];
     bson_t child[1];
+    bson_iter_t iter;
+    bson_iter_t child_iter;
+
     bson_init(bs);
     BSON_APPEND_ARRAY_BEGIN(bs, "Hello", child);
     BSON_APPEND_UTF8(child, "0", "awesome");
@@ -936,6 +939,18 @@ TEST(Bson_bson)
     BSON_APPEND_UTF8(child, "0", "pink");
     bson_append_array_end(bs, child);
 
+    if (bson_iter_init (&iter, bs)) {
+        while (bson_iter_next (&iter)) {
+            std::cout << "Found element key: " << bson_iter_key (&iter) << std::endl;
+            bson_iter_value(&iter);
+            if (BSON_ITER_HOLDS_ARRAY(&iter) && bson_iter_recurse (&iter, &child_iter)) {
+                while (bson_iter_next (&child_iter)) {
+                   std::cout << "   Found sub-key: " << bson_iter_key (&child_iter) << std::endl;
+                   auto value = bson_iter_value(&child_iter);
+                };
+            }
+        }
+    }
     size_t len;
     char* str;
 
@@ -943,6 +958,8 @@ TEST(Bson_bson)
     std::cout << str << std::endl;
     auto data1 = bson_get_data(bs);
     auto data2 = bson_get_data(child);
+
+    auto new_bson = bson_new_from_data(data1, bs->len);
 }
 
 } // anonymous namespace
