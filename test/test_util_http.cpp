@@ -415,8 +415,9 @@ struct ChunkedEncodingHTTPParser : public HTTPParser<Socket> {
     }
 
     void modify_buffer(const std::string& str) {
-        this->m_read_buffer.reset(static_cast<char*>(std::calloc(str.size(), 1)));
-        for (size_t i = 0; i < str.size(); i++) {
+        // +1 to append null termination
+        this->m_read_buffer.reset(static_cast<char*>(std::calloc(str.size() + 1, sizeof(char))));
+        for (size_t i = 0; i < str.size() + 1; i++) {
             this->m_read_buffer.get()[i] = str[i];
         }
     }
@@ -479,7 +480,6 @@ struct MockedSocket : network::Socket {
 
     size_t read_until(char* buffer, std::size_t, char delim, std::error_code&)
     {
-
         if (m_run_count > 0) {
             shift_left(buffer, m_prev_index);
         }
@@ -494,7 +494,6 @@ struct MockedSocket : network::Socket {
 private:
     size_t m_run_count = 0;
     size_t m_prev_index = 0;
-    network::ReadAheadBuffer m_read_buffer;
 };
 
 TEST(HTTPParser_ChunkedEncoding)
@@ -510,10 +509,10 @@ TEST(HTTPParser_ChunkedEncoding)
     };
 
     // Single line
-    CHECK(parser_with_body("1e\r\nI am posting this information.\r\n0\r\n\r\n") == "I am posting this information.");
+    CHECK(parser_with_body("1e\r\nI am posting this information.\r\n0\r\n\r\n\0") == "I am posting this information.");
     // Multiline
-    CHECK(parser_with_body("33\r\nI am posting this information.\r\nThis is another line.\r\n0\r\n\r\n")
+    CHECK(parser_with_body("33\r\nI am posting this information.\r\nThis is another line.\r\n0\r\n\r\n\0")
           == "I am posting this information.This is another line.");
     // Empty
-    CHECK(parser_with_body("0\r\n\r\n0\r\n\r\n") == "");
+    CHECK(parser_with_body("0\r\n\r\n0\r\n\r\n\0") == "");
 }
