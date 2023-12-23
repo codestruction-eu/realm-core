@@ -341,6 +341,11 @@ public:
         m_socket.async_read(buffer, size, m_read_ahead_buffer, std::move(handler));
     }
 
+    size_t read_until(char* buffer, std::size_t size, char delim, std::error_code& ec)
+    {
+        return m_socket.read_until(buffer, size, delim, m_read_ahead_buffer, ec);
+    }
+
 private:
     network::Service m_service;
     network::Socket m_socket{m_service};

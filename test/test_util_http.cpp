@@ -35,6 +35,11 @@ struct BufferedSocket : network::Socket {
         network::Socket::async_read(buffer, size, m_read_buffer, std::move(handler));
     }
 
+    size_t read_until(char* buffer, std::size_t size, char delim, std::error_code& ec)
+    {
+        return network::Socket::read_until(buffer, size, delim, m_read_buffer, ec);
+    }
+
 private:
     network::ReadAheadBuffer m_read_buffer;
 };
@@ -376,4 +381,139 @@ TEST(HTTPParser_ParseHeaderLine)
             CHECK_EQUAL(p.value, expectations[i].value);
         }
     }
+}
+
+template<typename Socket>
+struct ChunkedEncodingHTTPParser : public HTTPParser<Socket> {
+    StringData key;
+    StringData value;
+    std::string body;
+    std::error_code error;
+
+    ChunkedEncodingHTTPParser(Socket& socket, const std::shared_ptr<util::Logger>& logger_ptr)
+        : HTTPParser<Socket>{socket, logger_ptr}
+    {
+        this->m_has_chunked_encoding = true;
+    }
+
+    std::error_code on_first_line(StringData) override
+    {
+        return std::error_code{};
+    }
+    void on_header(StringData k, StringData v) override
+    {
+        key = k;
+        value = v;
+    }
+    void on_body(StringData b) override
+    {
+        body = b;
+    }
+    void on_complete(std::error_code ec) override
+    {
+        error = ec;
+    }
+
+    void modify_buffer(const std::string& str) {
+        this->m_read_buffer.reset(static_cast<char*>(std::calloc(str.size(), 1)));
+        for (size_t i = 0; i < str.size(); i++) {
+            this->m_read_buffer.get()[i] = str[i];
+        }
+    }
+};
+
+struct MockedSocket : network::Socket {
+    MockedSocket(network::Service& service)
+        : network::Socket(service)
+    {
+    }
+
+    MockedSocket(network::Service& service, const network::StreamProtocol& protocol,
+                   native_handle_type native_handle)
+        : network::Socket(service, protocol, native_handle)
+    {
+    }
+
+
+    template <class H>
+    void async_read_until(char*, std::size_t, char, H)
+    {
+        REALM_TERMINATE("Not used");
+    }
+
+    template <class H>
+    void async_read(char*, std::size_t, H)
+    {
+        REALM_TERMINATE("Not used");
+    }
+
+    void shift_left(char* str, size_t x) {
+        if (str == nullptr || x == 0) {
+            return;  // Nothing to do if the string is null or x is zero
+        }
+
+        size_t length = strlen(str);
+
+        // If x is greater than or equal to the length, the result will be an empty string
+        if (x >= length) {
+            str[0] = '\0';
+        } else {
+            // Shift characters to the left by x positions
+            memmove(str, str + x, length - x + 1); // +1 to include the null terminator
+        }
+    }
+
+    int index_of_char(const char* str, char target) {
+        if (str == nullptr) {
+            return -1;  // Handle the case of a null pointer
+        }
+
+        for (int i = 0; str[i] != '\0'; ++i) {
+            if (str[i] == target) {
+                return i;  // Return the index if the character is found
+            }
+        }
+
+        return -1;  // Return -1 if the character is not found
+    }
+
+    size_t read_until(char* buffer, std::size_t, char delim, std::error_code&)
+    {
+
+        if (m_run_count > 0) {
+            shift_left(buffer, m_prev_index);
+        }
+
+        size_t index_of = index_of_char(buffer, delim) + 1;
+
+        m_prev_index = index_of;
+        m_run_count++;
+        return index_of;
+    }
+
+private:
+    size_t m_run_count = 0;
+    size_t m_prev_index = 0;
+    network::ReadAheadBuffer m_read_buffer;
+};
+
+TEST(HTTPParser_ChunkedEncoding)
+{
+    network::Service server;
+
+    auto parser_with_body = [this, &server](const std::string& input) {
+        MockedSocket socket(server);
+        auto parser = ChunkedEncodingHTTPParser<MockedSocket>(socket, test_context.logger);
+        parser.modify_buffer(input);
+        parser.read_body();
+        return parser.body;
+    };
+
+    // Single line
+    CHECK(parser_with_body("1e\r\nI am posting this information.\r\n0\r\n\r\n") == "I am posting this information.");
+    // Multiline
+    CHECK(parser_with_body("33\r\nI am posting this information.\r\nThis is another line.\r\n0\r\n\r\n")
+          == "I am posting this information.This is another line.");
+    // Empty
+    CHECK(parser_with_body("0\r\n\r\n0\r\n\r\n") == "");
 }

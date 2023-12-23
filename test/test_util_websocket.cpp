@@ -207,6 +207,10 @@ public:
         m_pipe_in.async_read_until(buffer, size, delim, std::move(handler));
     }
 
+    size_t read_until(char*, std::size_t, char, std::error_code&) override {
+        REALM_TERMINATE("read_until is not in use for Websockets");
+    }
+
     void websocket_handshake_completion_handler(const HTTPHeaders&) override
     {
         n_handshake_completed++;

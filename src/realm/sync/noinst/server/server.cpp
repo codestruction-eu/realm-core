@@ -1205,6 +1205,15 @@ public:
         }
     }
 
+    size_t read_until(char* buffer, std::size_t size, char delim, std::error_code& ec) override {
+        if (m_ssl_stream) {
+            return m_ssl_stream->read_until(buffer, size, delim, *m_read_ahead_buffer, ec); // Throws
+        }
+        else {
+            return m_socket->read_until(buffer, size, delim, *m_read_ahead_buffer, ec); // Throws
+        }
+    }
+
     void websocket_read_error_handler(std::error_code ec) final override
     {
         read_error(ec);
@@ -1530,6 +1539,16 @@ public:
         else {
             m_socket->async_read_until(buffer, size, delim, *m_read_ahead_buffer,
                                        std::move(handler)); // Throws
+        }
+    }
+
+    size_t read_until(char* buffer, std::size_t size, char delim, std::error_code& ec)
+    {
+        if (m_ssl_stream) {
+            return m_ssl_stream->read_until(buffer, size, delim, *m_read_ahead_buffer, ec); // Throws
+        }
+        else {
+            return m_socket->read_until(buffer, size, delim, *m_read_ahead_buffer, ec); // Throws
         }
     }
 

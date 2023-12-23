@@ -56,6 +56,7 @@ public:
     void async_read(char*, std::size_t, ReadCompletionHandler) override;
     void async_read_until(char*, std::size_t, char, ReadCompletionHandler) override;
     void async_write(const char*, std::size_t, WriteCompletionHandler) override;
+    size_t read_until(char* buffer, std::size_t size, char delim, std::error_code& ec) override;
 
 private:
     using milliseconds_type = std::int_fast64_t;
@@ -266,6 +267,16 @@ void DefaultWebSocketImpl::async_write(const char* data, std::size_t size, Write
     }
     else {
         m_socket->async_write(data, size, std::move(handler)); // Throws
+    }
+}
+
+size_t DefaultWebSocketImpl::read_until(char* data, std::size_t size, char delim, std::error_code& ec) {
+    REALM_ASSERT(m_socket);
+    if (m_ssl_stream) {
+        return m_ssl_stream->read_until(data, size, delim, m_read_ahead_buffer, ec); // Throws
+    }
+    else {
+        return m_socket->read_until(data, size, delim, m_read_ahead_buffer, ec); // Throws
     }
 }
 

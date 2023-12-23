@@ -39,6 +39,7 @@ public:
     virtual void async_write(const char* data, size_t size, WriteCompletionHandler handler) = 0;
     virtual void async_read(char* buffer, size_t size, ReadCompletionHandler handler) = 0;
     virtual void async_read_until(char* buffer, size_t size, char delim, ReadCompletionHandler handler) = 0;
+    virtual size_t read_until(char* buffer, std::size_t size, char delim, std::error_code& ec) = 0;
     //@}
 
     /// websocket_handshake_completion_handler() is called when the websocket is connected, .i.e.

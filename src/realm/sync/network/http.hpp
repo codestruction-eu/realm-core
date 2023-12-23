@@ -341,29 +341,23 @@ struct HTTPParser : protected HTTPParserBase {
             };
             m_socket.async_read(m_read_buffer.get(), *m_found_content_length, std::move(handler));
         } else if (m_has_chunked_encoding) {
-            if constexpr (!std::is_base_of_v<sync::websocket::Config, Socket>) {
-                bool end_found = false;
-                std::stringstream ss;
-                std::error_code ec;
-                while (!end_found) {
-                    auto res = m_socket.read_util(m_read_buffer.get(), 8, '\r\n', ec);
-                    REALM_ASSERT(ec != util::error::operation_aborted);
-                    auto chunk_size = hex_to_int(StringData(m_read_buffer.get(), res)) + res;
-
-                    if  (StringData(m_read_buffer.get(), res) == "0\r\n") {
-                        end_found = true;
-                        break;
-                    }
-                    m_socket.read_util(m_read_buffer.get(), chunk_size, '\n', ec);
-                    REALM_ASSERT(ec != util::error::operation_aborted);
-                    auto chunk_data = StringData(m_read_buffer.get(), chunk_size);
-                    ss << chunk_data;
+            std::stringstream ss;
+            std::error_code ec;
+            size_t offset = 0;
+            auto chunk_end_index = m_socket.read_until(m_read_buffer.get(), 8, '\n', ec); // remove trailing \r
+            REALM_ASSERT(ec != util::error::operation_aborted);
+            offset = hex_to_int(StringData(m_read_buffer.get(), chunk_end_index - 2)) + chunk_end_index;
+            for (;;) {
+                offset = m_socket.read_until(m_read_buffer.get(), offset, '\n', ec);
+                REALM_ASSERT(ec != util::error::operation_aborted);
+                if  (StringData(m_read_buffer.get(), offset).contains("0\r\n")) {
+                    break;
                 }
-                on_body(ss.str());
-                on_complete(ec);
-            } else {
-                REALM_TERMINATE("Socket does not implement `read_util`");
+                auto chunk_data = StringData(m_read_buffer.get(), offset - 2 /*-2 to strip \r\n*/);
+                ss << chunk_data;
             }
+            on_body(ss.str());
+            on_complete(ec);
         } else {
             // No body, just finish.
             on_complete();
