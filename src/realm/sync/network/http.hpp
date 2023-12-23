@@ -26,6 +26,8 @@
 #include <locale>
 #include <sstream>
 
+#include <iostream>
+
 #include <realm/util/optional.hpp>
 #include <realm/util/basic_system_errors.hpp>
 #include <realm/util/logger.hpp>
@@ -345,6 +347,9 @@ struct HTTPParser : protected HTTPParserBase {
             REALM_ASSERT(ec != util::error::operation_aborted);
             offset = hex_to_int(StringData(m_read_buffer.get(), chunk_end_index - 2)) + chunk_end_index;
             for (;;) {
+
+                std::cout << "PARSER BUFFER: " << m_read_buffer.get() << "\n";
+
                 offset = m_socket.read_until(m_read_buffer.get(), offset, '\n', ec);
                 REALM_ASSERT(ec != util::error::operation_aborted);
                 if  (StringData(m_read_buffer.get(), offset).contains("0\r\n")) {
