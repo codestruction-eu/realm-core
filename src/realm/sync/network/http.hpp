@@ -316,6 +316,7 @@ struct HTTPParser : protected HTTPParserBase {
         std::stringstream ss;
         ss << std::hex << hex;
         ss >> dec;
+        std::cout << "HEX TO INT: " << dec << "\n";
         return dec;
     }
 
@@ -344,18 +345,21 @@ struct HTTPParser : protected HTTPParserBase {
             std::error_code ec;
             size_t offset = 0;
             auto chunk_end_index = m_socket.read_until(m_read_buffer.get(), 8, '\n', ec); // remove trailing \r
+            std::cout << "PARSER BUFFER 1: " << m_read_buffer.get() << "\n";
             REALM_ASSERT(ec != util::error::operation_aborted);
             offset = hex_to_int(StringData(m_read_buffer.get(), chunk_end_index - 2)) + chunk_end_index;
             for (;;) {
 
-                std::cout << "PARSER BUFFER: " << m_read_buffer.get() << "\n";
+                std::cout << "PARSER BUFFER 2: " << m_read_buffer.get() << "\n";
 
                 offset = m_socket.read_until(m_read_buffer.get(), offset, '\n', ec);
                 REALM_ASSERT(ec != util::error::operation_aborted);
                 if  (StringData(m_read_buffer.get(), offset).contains("0\r\n")) {
+                    std::cout << "PARSER BUFFER END: " << m_read_buffer.get() << "\n";
                     break;
                 }
                 auto chunk_data = StringData(m_read_buffer.get(), offset - 2 /*-2 to strip \r\n*/);
+                std::cout << "PARSER BUFFER 3: " << m_read_buffer.get() << "\n";
                 ss << chunk_data;
             }
             on_body(ss.str());
