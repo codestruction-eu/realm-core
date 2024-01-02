@@ -1,6 +1,7 @@
 #pragma once
 
 #include "realm/binary_data.hpp"
+#include "realm/data_type.hpp"
 #include "realm/object-store/object_store.hpp"
 #include "realm/object-store/sync/mongo_collection.hpp"
 #include "realm/object-store/sync/sync_session.hpp"
@@ -276,6 +277,10 @@ struct Helpers {
                                                 const char* pem_data, size_t pem_size, int preverify_ok, int depth) {
             return callback(server_address, server_port, std::string_view(pem_data, pem_size), preverify_ok, depth);
         };
+    }
+
+    static DataType get_mixed_type(const Obj& obj, ColKey col_key) {
+        return obj.get_any(col_key).get_type();
     }
 };
 
