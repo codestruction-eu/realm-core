@@ -27,9 +27,9 @@
 namespace realm::c_api {
 using namespace realm::app;
 
-static_assert(realm_user_state_e(SyncUser::State::LoggedOut) == RLM_USER_STATE_LOGGED_OUT);
-static_assert(realm_user_state_e(SyncUser::State::LoggedIn) == RLM_USER_STATE_LOGGED_IN);
-static_assert(realm_user_state_e(SyncUser::State::Removed) == RLM_USER_STATE_REMOVED);
+static_assert(realm_user_state_e(UserState::LoggedOut) == RLM_USER_STATE_LOGGED_OUT);
+static_assert(realm_user_state_e(UserState::LoggedIn) == RLM_USER_STATE_LOGGED_IN);
+static_assert(realm_user_state_e(UserState::Removed) == RLM_USER_STATE_REMOVED);
 
 static_assert(realm_auth_provider_e(AuthProvider::ANONYMOUS) == RLM_AUTH_PROVIDER_ANONYMOUS);
 static_assert(realm_auth_provider_e(AuthProvider::ANONYMOUS_NO_REUSE) == RLM_AUTH_PROVIDER_ANONYMOUS_NO_REUSE);
@@ -275,7 +275,7 @@ RLM_API realm_app_t* realm_app_create_no_sync(realm_app_cache_mode_e mode, const
         // acquire the underlying shared_ptr and free the C wrapper class
         realm_app_t app_t(app);
         realm_backing_store_t* c_store = store_factory(user_data, &app_t);
-        std::shared_ptr<BackingStore> store = *c_store;
+        std::unique_ptr<BackingStore> store = *c_store;
         delete c_store;
         return store;
     };

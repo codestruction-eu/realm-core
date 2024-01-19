@@ -101,7 +101,7 @@ ResponseHandler<util::Optional<Bson>> get_document_handler(ResponseHandler<util:
 } // anonymous namespace
 
 MongoCollection::MongoCollection(const std::string& name, const std::string& database_name,
-                                 const std::shared_ptr<SyncUser>& user,
+                                 const std::shared_ptr<AppUser>& user,
                                  const std::shared_ptr<AppServiceClient>& service, const std::string& service_name)
     : m_name(name)
     , m_database_name(database_name)

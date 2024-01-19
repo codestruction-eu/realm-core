@@ -19,6 +19,8 @@
 #include <realm/object-store/sync/sync_manager.hpp>
 
 #include <realm/object-store/sync/impl/sync_client.hpp>
+#include <realm/object-store/sync/impl/sync_file.hpp>
+#include <realm/object-store/sync/app_backing_store.hpp>
 #include <realm/object-store/sync/sync_session.hpp>
 #include <realm/object-store/sync/sync_user.hpp>
 #include <realm/object-store/sync/app.hpp>
@@ -32,7 +34,7 @@
 using namespace realm;
 using namespace realm::_impl;
 
-SyncClientTimeouts::SyncClientTimeouts()
+app::SyncClientTimeouts::SyncClientTimeouts()
     : connect_timeout(sync::Client::default_connect_timeout)
     , connection_linger_time(sync::Client::default_connection_linger_time)
     , ping_keepalive_period(sync::Client::default_ping_keepalive_period)
@@ -41,15 +43,11 @@ SyncClientTimeouts::SyncClientTimeouts()
 {
 }
 
-SyncManager::SyncManager(std::shared_ptr<app::App> app, const SyncClientConfig& config)
+SyncManager::SyncManager(const app::SyncClientConfig& config, app::BackingStore& backing_store, SyncFileManager& file_manager)
+: m_backing_store(backing_store)
+, m_file_manager(file_manager)
+, m_config(config)
 {
-    REALM_ASSERT(app);
-    m_app = app;
-    m_sync_route = "";
-    m_config = std::move(config);
-    if (m_sync_client)
-        return;
-
     // create a new logger - if the logger_factory is updated later, a new
     // logger will be created at that time.
     do_make_logger();
@@ -59,9 +57,6 @@ void SyncManager::reset_for_testing()
 {
     {
         util::CheckedLockGuard lock(m_mutex);
-        if (auto app = m_app.lock()) {
-            app->backing_store()->reset_for_testing();
-        }
         // Stop the client. This will abort any uploads that inactive sessions are waiting for.
         if (m_sync_client)
             m_sync_client->stop();
@@ -122,7 +117,7 @@ void SyncManager::set_log_level(util::Logger::Level level) noexcept
     }
 }
 
-void SyncManager::set_logger_factory(SyncClientConfig::LoggerFactory factory)
+void SyncManager::set_logger_factory(app::SyncClientConfig::LoggerFactory factory)
 {
     util::CheckedLockGuard lock(m_mutex);
     m_config.logger_factory = std::move(factory);
@@ -157,7 +152,7 @@ void SyncManager::set_user_agent(std::string user_agent)
     m_config.user_agent_application_info = std::move(user_agent);
 }
 
-void SyncManager::set_timeouts(SyncClientTimeouts timeouts)
+void SyncManager::set_timeouts(app::SyncClientTimeouts timeouts)
 {
     util::CheckedLockGuard lock(m_mutex);
     m_config.timeouts = timeouts;
@@ -198,6 +193,73 @@ SyncManager::~SyncManager() NO_THREAD_SAFETY_ANALYSIS
         if (m_sync_client)
             m_sync_client->stop();
     }
+}
+
+struct UnsupportedBsonPartition : public std::logic_error {
+    UnsupportedBsonPartition(std::string msg)
+        : std::logic_error(msg)
+    {
+    }
+};
+
+static std::string string_from_partition(std::string_view partition)
+{
+    bson::Bson partition_value = bson::parse(partition);
+    switch (partition_value.type()) {
+        case bson::Bson::Type::Int32:
+            return util::format("i_%1", static_cast<int32_t>(partition_value));
+        case bson::Bson::Type::Int64:
+            return util::format("l_%1", static_cast<int64_t>(partition_value));
+        case bson::Bson::Type::String:
+            return util::format("s_%1", static_cast<std::string>(partition_value));
+        case bson::Bson::Type::ObjectId:
+            return util::format("o_%1", static_cast<ObjectId>(partition_value).to_string());
+        case bson::Bson::Type::Uuid:
+            return util::format("u_%1", static_cast<UUID>(partition_value).to_string());
+        case bson::Bson::Type::Null:
+            return "null";
+        default:
+            throw UnsupportedBsonPartition(util::format("Unsupported partition key value: '%1'. Only int, string "
+                                                        "UUID and ObjectId types are currently supported.",
+                                                        partition_value.to_string()));
+    }
+}
+
+
+std::string SyncManager::path_for_realm(const SyncConfig& config, util::Optional<std::string> custom_file_name) const
+{
+    auto user = config.user;
+    REALM_ASSERT(user);
+    // Attempt to make a nicer filename which will ease debugging when
+    // locating files in the filesystem.
+    auto file_name = [&]() -> std::string {
+        if (custom_file_name) {
+            return *custom_file_name;
+        }
+        if (config.flx_sync_requested) {
+            REALM_ASSERT_DEBUG(config.partition_value.empty());
+            return "flx_sync_default";
+        }
+        return string_from_partition(config.partition_value);
+    }();
+    auto path = m_file_manager.realm_file_path(user->user_id(), user->legacy_identities(), file_name,
+                                                config.partition_value);
+    m_backing_store.add_realm_path(user->user_id(), path);
+    return path;
+}
+
+std::string SyncManager::audit_path_root(const SyncUser& user, std::string_view app_id,
+                                         std::string_view partition_prefix) const
+{
+#ifdef _WIN32 // Move to File?
+    const char separator[] = "\\";
+#else
+    const char separator[] = "/";
+#endif
+
+    // "$root/realm-audit/$appId/$userId/$partitonPrefix/"
+//    return util::format("%2%1realm-audit%1%3%1%4%1%5%1", separator, m_config.base_file_path, app_id, user.user_id(), partition_prefix);
+    return "";
 }
 
 std::vector<std::shared_ptr<SyncSession>> SyncManager::get_all_sessions() const
@@ -355,7 +417,7 @@ SyncClient& SyncManager::get_sync_client() const
 
 std::unique_ptr<SyncClient> SyncManager::create_sync_client() const
 {
-    return std::make_unique<SyncClient>(m_logger_ptr, m_config, weak_from_this());
+    return std::make_unique<SyncClient>(m_logger_ptr, m_config);
 }
 
 void SyncManager::close_all_sessions()

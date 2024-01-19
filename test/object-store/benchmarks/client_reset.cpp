@@ -31,6 +31,8 @@
 #include <realm/sync/noinst/client_reset.hpp>
 #include <realm/sync/noinst/client_reset_recovery.hpp>
 
+#include <realm/list.hpp>
+
 namespace realm {
 
 static TableRef get_table(Realm& realm, StringData object_type)

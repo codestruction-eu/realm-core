@@ -94,7 +94,7 @@ TEST_CASE("SyncSession: management by SyncUser", "[sync][session]") {
     SECTION("a SyncUser defers binding new sessions until it is logged in") {
         auto user = get_user(app);
         user->log_out();
-        REQUIRE(user->state() == SyncUser::State::LoggedOut);
+        REQUIRE(user->state() == UserState::LoggedOut);
         auto session1 = sync_session(user, "/test1c-1");
         auto session2 = sync_session(user, "/test1c-2");
         // Run the runloop many iterations to see if the sessions spuriously bind.
@@ -131,7 +131,7 @@ TEST_CASE("SyncSession: management by SyncUser", "[sync][session]") {
         REQUIRE(app->sync_manager()->get_all_sessions_for(*user).size() == 2);
         // Log the user out.
         user->log_out();
-        REQUIRE(user->state() == SyncUser::State::LoggedOut);
+        REQUIRE(user->state() == UserState::LoggedOut);
         // Run the runloop many iterations to see if the sessions spuriously rebind.
         spin_runloop();
         REQUIRE(session1->state() == SyncSession::State::Inactive);

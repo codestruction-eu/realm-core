@@ -23,7 +23,7 @@
 #include <string>
 
 namespace realm {
-class SyncUser;
+class AppUser;
 namespace app {
 
 class AppServiceClient;
@@ -54,7 +54,7 @@ public:
     MongoCollection operator[](const std::string& collection_name);
 
 private:
-    MongoDatabase(std::string name, std::shared_ptr<SyncUser> user, std::shared_ptr<AppServiceClient> service,
+    MongoDatabase(std::string name, std::shared_ptr<AppUser> user, std::shared_ptr<AppServiceClient> service,
                   std::string service_name)
         : m_name(std::move(name))
         , m_user(std::move(user))
@@ -66,7 +66,7 @@ private:
     friend class MongoClient;
 
     std::string m_name;
-    std::shared_ptr<SyncUser> m_user;
+    std::shared_ptr<AppUser> m_user;
     std::shared_ptr<AppServiceClient> m_service;
     std::string m_service_name;
 };

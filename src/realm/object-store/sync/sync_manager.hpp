@@ -19,18 +19,9 @@
 #ifndef REALM_OS_SYNC_MANAGER_HPP
 #define REALM_OS_SYNC_MANAGER_HPP
 
-#include <realm/object-store/shared_realm.hpp>
-#include <realm/object-store/sync/realm_backing_store.hpp>
-
+#include <realm/object-store/sync/app_config.hpp>
 #include <realm/util/checked_mutex.hpp>
-#include <realm/util/logger.hpp>
-#include <realm/util/optional.hpp>
-#include <realm/sync/binding_callback_thread_observer.hpp>
-#include <realm/sync/config.hpp>
-#include <realm/sync/socket_provider.hpp>
 
-#include <memory>
-#include <mutex>
 #include <unordered_map>
 
 class TestAppSession;
@@ -40,59 +31,20 @@ namespace realm {
 
 class DB;
 struct SyncConfig;
+struct RealmConfig;
 class SyncSession;
 class SyncUser;
+class SyncFileManager;
 
 namespace _impl {
 struct SyncClient;
 }
 
 namespace app {
-class App;
+class BackingStore;
 }
 
-struct SyncClientTimeouts {
-    SyncClientTimeouts();
-    // See sync::Client::Config for the meaning of these fields.
-    uint64_t connect_timeout;
-    uint64_t connection_linger_time;
-    uint64_t ping_keepalive_period;
-    uint64_t pong_keepalive_timeout;
-    uint64_t fast_reconnect_limit;
-};
-
-struct SyncClientConfig {
-    using LoggerFactory = std::function<std::shared_ptr<util::Logger>(util::Logger::Level)>;
-    LoggerFactory logger_factory;
-    util::Logger::Level log_level = util::Logger::Level::info;
-    ReconnectMode reconnect_mode = ReconnectMode::normal; // For internal sync-client testing only!
-#if REALM_DISABLE_SYNC_MULTIPLEXING
-    bool multiplex_sessions = false;
-#else
-    bool multiplex_sessions = true;
-#endif
-
-    // The SyncSocket instance used by the Sync Client for event synchronization
-    // and creating WebSockets. If not provided the default implementation will be used.
-    std::shared_ptr<sync::SyncSocketProvider> socket_provider;
-
-    // Optional thread observer for event loop thread events in the default SyncSocketProvider
-    // implementation. It is not used for custom SyncSocketProvider implementations.
-    std::shared_ptr<BindingCallbackThreadObserver> default_socket_provider_thread_observer;
-
-    // {@
-    // Optional information about the binding/application that is sent as part of the User-Agent
-    // when establishing a connection to the server. These values are only used by the default
-    // SyncSocket implementation. Custom SyncSocket implementations must update the User-Agent
-    // directly, if supported by the platform APIs.
-    std::string user_agent_binding_info;
-    std::string user_agent_application_info;
-    // @}
-
-    SyncClientTimeouts timeouts;
-};
-
-class SyncManager : public std::enable_shared_from_this<SyncManager> {
+class SyncManager {
     friend class SyncSession;
     friend class ::TestSyncManager;
     friend class ::TestAppSession;
@@ -114,7 +66,7 @@ public:
     // created (when the first Session is created) or an App operation is
     // performed (e.g. log in).
     void set_log_level(util::Logger::Level) noexcept REQUIRES(!m_mutex);
-    void set_logger_factory(SyncClientConfig::LoggerFactory) REQUIRES(!m_mutex);
+    void set_logger_factory(app::SyncClientConfig::LoggerFactory) REQUIRES(!m_mutex);
 
     // Sets the application level user agent string.
     // This should have the format specified here:
@@ -125,7 +77,7 @@ public:
     // Sets client timeout settings.
     // The timeout settings can only be set up until the point the Sync Client is created.
     // This happens when the first Session is created.
-    void set_timeouts(SyncClientTimeouts timeouts) REQUIRES(!m_mutex);
+    void set_timeouts(app::SyncClientTimeouts timeouts) REQUIRES(!m_mutex);
 
     /// Ask all valid sync sessions to perform whatever tasks might be necessary to
     /// re-establish connectivity with the Realm Object Server. It is presumed that
@@ -157,6 +109,16 @@ public:
     // makes it possible to guarantee that all sessions have, in fact, been closed.
     void wait_for_sessions_to_terminate() REQUIRES(!m_mutex);
 
+    // Get the default path for a Realm for the given configuration.
+    // The default value is `<rootDir>/<appId>/<userId>/<partitionValue>.realm`.
+    // If the file cannot be created at this location, for example due to path length restrictions,
+    // this function may pass back `<rootDir>/<hashedFileName>.realm`
+    std::string path_for_realm(const SyncConfig& config, util::Optional<std::string> custom_file_name = none) const;
+
+    // Get the base path where audit Realms will be stored. This path may need to be created.
+    std::string audit_path_root(const SyncUser& user, std::string_view app_id,
+                                std::string_view partition_prefix) const;
+
     // Reset the singleton state for testing purposes. DO NOT CALL OUTSIDE OF TESTING CODE.
     // Precondition: any synced Realms or `SyncSession`s must be closed or rendered inactive prior to
     // calling this method.
@@ -177,13 +139,7 @@ public:
         return m_sync_route;
     }
 
-    std::weak_ptr<app::App> app() const REQUIRES(!m_mutex)
-    {
-        util::CheckedLockGuard lock(m_mutex);
-        return m_app;
-    }
-
-    SyncClientConfig config() const REQUIRES(!m_mutex)
+    app::SyncClientConfig config() const REQUIRES(!m_mutex)
     {
         util::CheckedLockGuard lock(m_mutex);
         return m_config;
@@ -192,7 +148,7 @@ public:
     // Return the cached logger
     const std::shared_ptr<util::Logger>& get_logger() const REQUIRES(!m_mutex);
 
-    SyncManager(std::shared_ptr<app::App> app, const SyncClientConfig& config);
+    SyncManager(const app::SyncClientConfig& config, app::BackingStore& backing_store, SyncFileManager& file_manager);
     SyncManager(const SyncManager&) = delete;
     SyncManager& operator=(const SyncManager&) = delete;
 
@@ -202,15 +158,21 @@ public:
         static void voluntary_disconnect_all_connections(SyncManager&);
     };
 
-protected:
-    friend class SyncUser;
-    friend class SyncSesson;
-
-    using std::enable_shared_from_this<SyncManager>::shared_from_this;
-    using std::enable_shared_from_this<SyncManager>::weak_from_this;
-
 private:
-    friend class app::App;
+    app::BackingStore& m_backing_store;
+    SyncFileManager& m_file_manager;
+
+    util::CheckedMutex m_mutex;
+    mutable std::unique_ptr<_impl::SyncClient> m_sync_client GUARDED_BY(m_mutex);
+    app::SyncClientConfig m_config GUARDED_BY(m_mutex);
+    std::shared_ptr<util::Logger> m_logger_ptr GUARDED_BY(m_mutex);
+    std::string m_sync_route GUARDED_BY(m_mutex);
+
+    // Map of sessions by path name.
+    // Sessions remove themselves from this map by calling `unregister_session` once they're
+    // inactive and have performed any necessary cleanup work.
+    util::CheckedMutex m_session_mutex;
+    std::unordered_map<std::string, std::shared_ptr<SyncSession>> m_sessions GUARDED_BY(m_session_mutex);
 
     // Stop tracking the session for the given path if it is inactive.
     // No-op if the session is either still active or in the active sessions list
@@ -222,33 +184,14 @@ private:
 
     std::shared_ptr<SyncSession> get_existing_session_locked(const std::string& path) const REQUIRES(m_session_mutex);
 
-    mutable util::CheckedMutex m_mutex;
-
-    void init_metadata(SyncClientConfig config, const std::string& app_id);
+    void init_metadata(app::SyncClientConfig config, const std::string& app_id);
 
     // internally create a new logger - used by configure() and set_logger_factory()
     void do_make_logger() REQUIRES(m_mutex);
 
-    mutable std::unique_ptr<_impl::SyncClient> m_sync_client GUARDED_BY(m_mutex);
-
-    SyncClientConfig m_config GUARDED_BY(m_mutex);
-    mutable std::shared_ptr<util::Logger> m_logger_ptr GUARDED_BY(m_mutex);
-
-    // Protects m_sessions
-    mutable util::CheckedMutex m_session_mutex;
-
-    // Map of sessions by path name.
-    // Sessions remove themselves from this map by calling `unregister_session` once they're
-    // inactive and have performed any necessary cleanup work.
-    std::unordered_map<std::string, std::shared_ptr<SyncSession>> m_sessions GUARDED_BY(m_session_mutex);
-
     // Internal method returning `true` if the SyncManager still contains sessions not yet fully closed.
     // Callers of this method should hold the `m_session_mutex` themselves.
     bool do_has_existing_sessions() REQUIRES(m_session_mutex);
-
-    std::string m_sync_route GUARDED_BY(m_mutex);
-
-    std::weak_ptr<app::App> m_app GUARDED_BY(m_mutex);
 };
 
 } // namespace realm

@@ -46,9 +46,6 @@
 
 namespace realm {
 
-bool results_contains_user(SyncUserMetadataResults& results, const std::string& identity);
-bool results_contains_original_name(SyncFileActionMetadataResults& results, const std::string& original_name);
-
 void timed_wait_for(util::FunctionRef<bool()> condition,
                     std::chrono::milliseconds max_ms = std::chrono::milliseconds(5000));
 

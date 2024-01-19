@@ -481,19 +481,19 @@ TEST_CASE("app: UsernamePasswordProviderClient integration", "[sync][app][user][
 
         auto user = log_in(app, AppCredentials::username_password(email, password));
         CHECK(user->user_profile().email() == email);
-        CHECK(user->state() == SyncUser::State::LoggedIn);
+        CHECK(user->state() == UserState::LoggedIn);
 
         app->remove_user(user, [&](Optional<AppError> error) {
             REQUIRE_FALSE(error);
         });
-        CHECK(user->state() == SyncUser::State::Removed);
+        CHECK(user->state() == UserState::Removed);
 
         log_in(app, AppCredentials::username_password(email, password));
-        CHECK(user->state() == SyncUser::State::Removed);
+        CHECK(user->state() == UserState::Removed);
         CHECK(app->current_user() != user);
         user = app->current_user();
         CHECK(user->user_profile().email() == email);
-        CHECK(user->state() == SyncUser::State::LoggedIn);
+        CHECK(user->state() == UserState::LoggedIn);
 
         app->remove_user(user, [&](Optional<AppError> error) {
             REQUIRE(!error);
@@ -501,7 +501,7 @@ TEST_CASE("app: UsernamePasswordProviderClient integration", "[sync][app][user][
             processed = true;
         });
 
-        CHECK(user->state() == SyncUser::State::Removed);
+        CHECK(user->state() == UserState::Removed);
         CHECK(processed);
         CHECK(app->all_users().size() == 0);
     }
@@ -828,11 +828,11 @@ TEST_CASE("app: Linking user identities", "[sync][app][user][baas]") {
         app->log_out([](auto error) {
             REQUIRE_FALSE(error);
         });
-        REQUIRE(user->state() == SyncUser::State::LoggedOut);
+        REQUIRE(user->state() == UserState::LoggedOut);
         // Should give us the same user instance despite logging in with a
         // different identity
         REQUIRE(user == log_in(app, creds));
-        REQUIRE(user->state() == SyncUser::State::LoggedIn);
+        REQUIRE(user->state() == UserState::LoggedIn);
     }
 }
 
@@ -847,11 +847,11 @@ TEST_CASE("app: delete anonymous user integration", "[sync][app][user][baas]") {
 
         // Log in user 1
         auto user_a = app->current_user();
-        CHECK(user_a->state() == SyncUser::State::LoggedIn);
+        CHECK(user_a->state() == UserState::LoggedIn);
         app->delete_user(user_a, [&](Optional<app::AppError> error) {
             REQUIRE_FALSE(error);
             // a logged out anon user will be marked as Removed, not LoggedOut
-            CHECK(user_a->state() == SyncUser::State::Removed);
+            CHECK(user_a->state() == UserState::Removed);
         });
         CHECK(app->all_users().empty());
         CHECK(app->current_user() == nullptr);
@@ -864,7 +864,7 @@ TEST_CASE("app: delete anonymous user integration", "[sync][app][user][baas]") {
         // Log in user 2
         auto user_b = log_in(app);
         CHECK(app->current_user() == user_b);
-        CHECK(user_b->state() == SyncUser::State::LoggedIn);
+        CHECK(user_b->state() == UserState::LoggedIn);
         CHECK(app->all_users().size() == 1);
 
         app->delete_user(user_b, [&](Optional<app::AppError> error) {
@@ -875,8 +875,8 @@ TEST_CASE("app: delete anonymous user integration", "[sync][app][user][baas]") {
         CHECK(app->current_user() == nullptr);
 
         // check both handles are no longer valid
-        CHECK(user_a->state() == SyncUser::State::Removed);
-        CHECK(user_b->state() == SyncUser::State::Removed);
+        CHECK(user_a->state() == UserState::Removed);
+        CHECK(user_b->state() == UserState::Removed);
     }
 }
 
@@ -893,12 +893,12 @@ TEST_CASE("app: delete user with credentials integration", "[sync][app][user][ba
         auto user = app->current_user();
 
         CHECK(app->current_user() == user);
-        CHECK(user->state() == SyncUser::State::LoggedIn);
+        CHECK(user->state() == UserState::LoggedIn);
         app->delete_user(user, [&](Optional<app::AppError> error) {
             REQUIRE_FALSE(error);
             CHECK(app->all_users().size() == 0);
         });
-        CHECK(user->state() == SyncUser::State::Removed);
+        CHECK(user->state() == UserState::Removed);
         CHECK(app->current_user() == nullptr);
 
         app->log_in_with_credentials(credentials, [](std::shared_ptr<SyncUser> user, util::Optional<AppError> error) {
@@ -915,7 +915,7 @@ TEST_CASE("app: delete user with credentials integration", "[sync][app][user][ba
 
         CHECK(app->current_user() == nullptr);
         CHECK(app->all_users().size() == 0);
-        CHECK(user->state() == SyncUser::State::Removed);
+        CHECK(user->state() == UserState::Removed);
     }
 }
 
@@ -1899,7 +1899,7 @@ TEST_CASE("app: login_with_credentials unit_tests", "[sync][app][user]") {
 
             REQUIRE(user->identities().size() == 1);
             CHECK(user->identities()[0].id == UnitTestTransport::identity_0_id);
-            SyncUserProfile user_profile = user->user_profile();
+            AppUserProfile user_profile = user->user_profile();
 
             CHECK(user_profile.name() == profile_0_name);
             CHECK(user_profile.first_name() == profile_0_first_name);
@@ -1925,7 +1925,7 @@ TEST_CASE("app: login_with_credentials unit_tests", "[sync][app][user]") {
             auto user = app->all_users()[0];
             REQUIRE(user->identities().size() == 1);
             CHECK(user->identities()[0].id == UnitTestTransport::identity_0_id);
-            SyncUserProfile user_profile = user->user_profile();
+            AppUserProfile user_profile = user->user_profile();
 
             CHECK(user_profile.name() == profile_0_name);
             CHECK(user_profile.first_name() == profile_0_first_name);
@@ -2056,11 +2056,11 @@ TEST_CASE("app: user_semantics", "[sync][app][user]") {
     SECTION("current user is updated to last used user on logout") {
         const auto user1 = login_user_anonymous();
         CHECK(app->current_user()->user_id() == user1->user_id());
-        CHECK(app->all_users()[0]->state() == SyncUser::State::LoggedIn);
+        CHECK(app->all_users()[0]->state() == UserState::LoggedIn);
 
         const auto user2 = login_user_email_pass();
-        CHECK(app->all_users()[0]->state() == SyncUser::State::LoggedIn);
-        CHECK(app->all_users()[1]->state() == SyncUser::State::LoggedIn);
+        CHECK(app->all_users()[0]->state() == UserState::LoggedIn);
+        CHECK(app->all_users()[1]->state() == UserState::LoggedIn);
         CHECK(app->current_user()->user_id() == user2->user_id());
         CHECK(user1 != user2);
 
@@ -2079,7 +2079,7 @@ TEST_CASE("app: user_semantics", "[sync][app][user]") {
         CHECK(app->current_user()->user_id() == user2->user_id());
 
         CHECK(app->all_users().size() == 1);
-        CHECK(app->all_users()[0]->state() == SyncUser::State::LoggedIn);
+        CHECK(app->all_users()[0]->state() == UserState::LoggedIn);
 
         CHECK(event_processed == 4);
     }
@@ -2087,10 +2087,10 @@ TEST_CASE("app: user_semantics", "[sync][app][user]") {
     SECTION("anon users are removed on logout") {
         const auto user1 = login_user_anonymous();
         CHECK(app->current_user()->user_id() == user1->user_id());
-        CHECK(app->all_users()[0]->state() == SyncUser::State::LoggedIn);
+        CHECK(app->all_users()[0]->state() == UserState::LoggedIn);
 
         const auto user2 = login_user_anonymous();
-        CHECK(app->all_users()[0]->state() == SyncUser::State::LoggedIn);
+        CHECK(app->all_users()[0]->state() == UserState::LoggedIn);
         CHECK(app->all_users().size() == 1);
         CHECK(app->current_user()->user_id() == user2->user_id());
         CHECK(user1->user_id() == user2->user_id());
@@ -2109,24 +2109,24 @@ TEST_CASE("app: user_semantics", "[sync][app][user]") {
         app->log_out(user2, [](Optional<AppError> error) {
             REQUIRE_FALSE(error);
         });
-        CHECK(user2->state() == SyncUser::State::Removed);
+        CHECK(user2->state() == UserState::Removed);
 
         // Other users can be LoggedOut
         app->log_out(user1, [](Optional<AppError> error) {
             REQUIRE_FALSE(error);
         });
-        CHECK(user1->state() == SyncUser::State::LoggedOut);
+        CHECK(user1->state() == UserState::LoggedOut);
 
         // Logging out already logged out users, does nothing
         app->log_out(user1, [](Optional<AppError> error) {
             REQUIRE_FALSE(error);
         });
-        CHECK(user1->state() == SyncUser::State::LoggedOut);
+        CHECK(user1->state() == UserState::LoggedOut);
 
         app->log_out(user2, [](Optional<AppError> error) {
             REQUIRE_FALSE(error);
         });
-        CHECK(user2->state() == SyncUser::State::Removed);
+        CHECK(user2->state() == UserState::Removed);
 
         CHECK(event_processed == 4);
     }
@@ -2136,10 +2136,10 @@ TEST_CASE("app: user_semantics", "[sync][app][user]") {
 
         const auto user1 = login_user_anonymous();
         CHECK(app->current_user()->user_id() == user1->user_id());
-        CHECK(app->all_users()[0]->state() == SyncUser::State::LoggedIn);
+        CHECK(app->all_users()[0]->state() == UserState::LoggedIn);
 
         const auto user2 = login_user_anonymous();
-        CHECK(app->all_users()[0]->state() == SyncUser::State::LoggedIn);
+        CHECK(app->all_users()[0]->state() == UserState::LoggedIn);
         CHECK(app->all_users().size() == 1);
         CHECK(app->current_user()->user_id() == user2->user_id());
         CHECK(user1->user_id() == user2->user_id());
@@ -2292,7 +2292,7 @@ TEST_CASE("app: switch user", "[sync][app][user]") {
         });
 
         CHECK(app->current_user() == nullptr);
-        CHECK(user_a->state() == SyncUser::State::LoggedOut);
+        CHECK(user_a->state() == UserState::LoggedOut);
 
         // Log in user 2
         auto user_b = log_in(app, AppCredentials::username_password("test2@10gen.com", "password"));
@@ -2313,12 +2313,12 @@ TEST_CASE("app: remove anonymous user", "[sync][app][user]") {
 
         // Log in user 1
         auto user_a = log_in(app);
-        CHECK(user_a->state() == SyncUser::State::LoggedIn);
+        CHECK(user_a->state() == UserState::LoggedIn);
 
         app->log_out(user_a, [&](Optional<AppError> error) {
             REQUIRE_FALSE(error);
             // a logged out anon user will be marked as Removed, not LoggedOut
-            CHECK(user_a->state() == SyncUser::State::Removed);
+            CHECK(user_a->state() == UserState::Removed);
         });
         CHECK(app->all_users().empty());
 
@@ -2330,7 +2330,7 @@ TEST_CASE("app: remove anonymous user", "[sync][app][user]") {
         // Log in user 2
         auto user_b = log_in(app);
         CHECK(app->current_user() == user_b);
-        CHECK(user_b->state() == SyncUser::State::LoggedIn);
+        CHECK(user_b->state() == UserState::LoggedIn);
         CHECK(app->all_users().size() == 1);
 
         app->remove_user(user_b, [&](Optional<AppError> error) {
@@ -2341,8 +2341,8 @@ TEST_CASE("app: remove anonymous user", "[sync][app][user]") {
         CHECK(app->current_user() == nullptr);
 
         // check both handles are no longer valid
-        CHECK(user_a->state() == SyncUser::State::Removed);
-        CHECK(user_b->state() == SyncUser::State::Removed);
+        CHECK(user_a->state() == UserState::Removed);
+        CHECK(user_b->state() == UserState::Removed);
     }
 }
 
@@ -2356,13 +2356,13 @@ TEST_CASE("app: remove user with credentials", "[sync][app][user]") {
 
         auto user = log_in(app, AppCredentials::username_password("email", "pass"));
 
-        CHECK(user->state() == SyncUser::State::LoggedIn);
+        CHECK(user->state() == UserState::LoggedIn);
 
         app->log_out(user, [&](Optional<AppError> error) {
             REQUIRE_FALSE(error);
         });
 
-        CHECK(user->state() == SyncUser::State::LoggedOut);
+        CHECK(user->state() == UserState::LoggedOut);
 
         app->remove_user(user, [&](Optional<AppError> error) {
             REQUIRE_FALSE(error);
@@ -2375,7 +2375,7 @@ TEST_CASE("app: remove user with credentials", "[sync][app][user]") {
         });
         CHECK(error->code() > 0);
         CHECK(app->all_users().size() == 0);
-        CHECK(user->state() == SyncUser::State::Removed);
+        CHECK(user->state() == UserState::Removed);
     }
 }
 
@@ -2712,7 +2712,7 @@ TEST_CASE("app: make_streaming_request", "[sync][app][streaming]") {
 
 TEST_CASE("app: sync_user_profile unit tests", "[sync][app][user]") {
     SECTION("with empty map") {
-        auto profile = SyncUserProfile(bson::BsonDocument());
+        auto profile = AppUserProfile(bson::BsonDocument());
         CHECK(profile.name() == util::none);
         CHECK(profile.email() == util::none);
         CHECK(profile.picture_url() == util::none);
@@ -2724,7 +2724,7 @@ TEST_CASE("app: sync_user_profile unit tests", "[sync][app][user]") {
         CHECK(profile.max_age() == util::none);
     }
     SECTION("with full map") {
-        auto profile = SyncUserProfile(bson::BsonDocument({
+        auto profile = AppUserProfile(bson::BsonDocument({
             {"first_name", "Jan"},
             {"last_name", "Jaanson"},
             {"name", "Jan Jaanson"},

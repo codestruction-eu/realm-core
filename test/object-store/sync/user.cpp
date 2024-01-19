@@ -46,7 +46,7 @@ TEST_CASE("sync_user: SyncManager `get_user()` API", "[sync][user]") {
         REQUIRE(user->user_id() == identity);
         REQUIRE(user->refresh_token() == refresh_token);
         REQUIRE(user->access_token() == access_token);
-        REQUIRE(user->state() == SyncUser::State::LoggedIn);
+        REQUIRE(user->state() == UserState::LoggedIn);
     }
 
     SECTION("properly retrieves a previously created user, updating fields as necessary") {
@@ -72,13 +72,13 @@ TEST_CASE("sync_user: SyncManager `get_user()` API", "[sync][user]") {
         auto first = sync_manager->get_user(identity, refresh_token, access_token, dummy_device_id);
         REQUIRE(first->user_id() == identity);
         first->log_out();
-        REQUIRE(first->state() == SyncUser::State::LoggedOut);
+        REQUIRE(first->state() == UserState::LoggedOut);
         // Get the user again, with a new token.
         auto second = sync_manager->get_user(identity, second_refresh_token, second_access_token, dummy_device_id);
         REQUIRE(second == first);
         REQUIRE(second->user_id() == identity);
         REQUIRE(second->refresh_token() == second_refresh_token);
-        REQUIRE(second->state() == SyncUser::State::LoggedIn);
+        REQUIRE(second->state() == UserState::LoggedIn);
     }
 }
 
@@ -125,7 +125,7 @@ TEST_CASE("sync_user: SyncManager get_existing_logged_in_user() API", "[sync][us
     SECTION("can get logged-in user from notification") {
         auto first = backing_store->get_user(identity, refresh_token, access_token, dummy_device_id);
         REQUIRE(first->user_id() == identity);
-        REQUIRE(first->state() == SyncUser::State::LoggedIn);
+        REQUIRE(first->state() == UserState::LoggedIn);
         REQUIRE(first->device_id() == dummy_device_id);
         bool notification_fired = false;
         auto sub_token = first->subscribe([&](const SyncUser& user) {
@@ -143,7 +143,7 @@ TEST_CASE("sync_user: SyncManager get_existing_logged_in_user() API", "[sync][us
     SECTION("properly returns an existing logged-in user") {
         auto first = backing_store->get_user(identity, refresh_token, access_token, dummy_device_id);
         REQUIRE(first->user_id() == identity);
-        REQUIRE(first->state() == SyncUser::State::LoggedIn);
+        REQUIRE(first->state() == UserState::LoggedIn);
         REQUIRE(first->device_id() == dummy_device_id);
         // Get that user using the 'existing user' API.
         auto second = backing_store->get_existing_logged_in_user(identity);
@@ -155,7 +155,7 @@ TEST_CASE("sync_user: SyncManager get_existing_logged_in_user() API", "[sync][us
         auto first = backing_store->get_user(identity, refresh_token, access_token, dummy_device_id);
         first->log_out();
         REQUIRE(first->user_id() == identity);
-        REQUIRE(first->state() == SyncUser::State::LoggedOut);
+        REQUIRE(first->state() == UserState::LoggedOut);
         // Get that user using the 'existing user' API.
         auto second = backing_store->get_existing_logged_in_user(identity);
         REQUIRE(!second);
@@ -171,9 +171,9 @@ TEST_CASE("sync_user: logout", "[sync][user]") {
 
     SECTION("properly changes the state of the user object") {
         auto user = backing_store->get_user(identity, refresh_token, access_token, dummy_device_id);
-        REQUIRE(user->state() == SyncUser::State::LoggedIn);
+        REQUIRE(user->state() == UserState::LoggedIn);
         user->log_out();
-        REQUIRE(user->state() == SyncUser::State::LoggedOut);
+        REQUIRE(user->state() == UserState::LoggedOut);
     }
 }
 
@@ -188,7 +188,7 @@ TEST_CASE("sync_user: user persistence", "[sync][user]") {
         const std::string user_id = "test_identity_1";
         const std::string refresh_token = ENCODE_FAKE_JWT("r-token-1");
         const std::string access_token = ENCODE_FAKE_JWT("a-token-1");
-        const std::vector<SyncUserIdentity> identities{{"12345", "test_case_provider"}};
+        const std::vector<AppUserIdentity> identities{{"12345", "test_case_provider"}};
         auto user = backing_store->get_user(user_id, refresh_token, access_token, dummy_device_id);
         user->update_user_profile(identities, {});
         // Now try to pull the user out of the shadow manager directly.
@@ -205,7 +205,7 @@ TEST_CASE("sync_user: user persistence", "[sync][user]") {
         const std::string user_id = "test_identity_1";
         const std::string refresh_token = ENCODE_FAKE_JWT("r-token-1");
         const std::string access_token = ENCODE_FAKE_JWT("a-token-1");
-        const std::vector<SyncUserIdentity> identities{{"12345", "test_case_provider"}};
+        const std::vector<AppUserIdentity> identities{{"12345", "test_case_provider"}};
         auto user = backing_store->get_user(user_id, refresh_token, access_token, dummy_device_id);
         user->update_user_profile(identities, {});
         user->log_out();
@@ -217,7 +217,7 @@ TEST_CASE("sync_user: user persistence", "[sync][user]") {
         REQUIRE(metadata->refresh_token() == "");
         REQUIRE(metadata->device_id() == dummy_device_id);
         REQUIRE(metadata->identities() == identities);
-        REQUIRE(metadata->state() == SyncUser::State::LoggedOut);
+        REQUIRE(metadata->state() == UserState::LoggedOut);
         REQUIRE(user->is_logged_in() == false);
     }
 
@@ -274,13 +274,13 @@ TEST_CASE("sync_user: user persistence", "[sync][user]") {
         auto first = backing_store->get_user(identity, refresh_token, access_token, dummy_device_id);
         first->log_out();
         REQUIRE(backing_store->all_users().size() == 1);
-        REQUIRE(backing_store->all_users()[0]->state() == SyncUser::State::LoggedOut);
+        REQUIRE(backing_store->all_users()[0]->state() == UserState::LoggedOut);
         // Log the user back in.
         const std::string r_token_2 = ENCODE_FAKE_JWT("r-token-4b");
         const std::string a_token_2 = ENCODE_FAKE_JWT("atoken-4b");
         auto second = backing_store->get_user(identity, r_token_2, a_token_2, dummy_device_id);
         REQUIRE(backing_store->all_users().size() == 1);
-        REQUIRE(backing_store->all_users()[0]->state() == SyncUser::State::LoggedIn);
+        REQUIRE(backing_store->all_users()[0]->state() == UserState::LoggedIn);
     }
 
     SECTION("properly deletes a user") {

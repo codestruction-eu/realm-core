@@ -92,6 +92,7 @@ set(HEADERS
 if(REALM_ENABLE_SYNC OR REALM_APP_SERVICES)
     list(APPEND HEADERS
         sync/app.hpp
+        sync/app_config.hpp
         sync/app_backing_store.hpp
         sync/app_utils.hpp
         sync/app_credentials.hpp

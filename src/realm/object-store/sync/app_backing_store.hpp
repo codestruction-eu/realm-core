@@ -19,110 +19,135 @@
 #ifndef REALM_OS_APP_BACKING_STORE_HPP
 #define REALM_OS_APP_BACKING_STORE_HPP
 
+#include <realm/object-store/sync/app_config.hpp>
+#include <realm/object-store/sync/sync_user.hpp>
+#include <realm/util/function_ref.hpp>
+
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
-#include <realm/object-store/sync/sync_user.hpp>
-#include <realm/util/function_ref.hpp>
-
 namespace realm {
+class AppUser;
+class SyncFileManager;
 
-class SyncAppMetadata;
-class SyncMetadataManager;
-class SyncUser;
+enum class SyncFileAction {
+    // The Realm files at the given directory will be deleted.
+    DeleteRealm,
+    // The Realm file will be copied to a 'recovery' directory, and the original Realm files will be deleted.
+    BackUpThenDeleteRealm
+};
 
 namespace app {
+struct AppMetadata {
+    std::string hostname;
+    std::string ws_hostname;
+};
 
 class App;
 
 class BackingStore {
 public:
-    BackingStore(std::weak_ptr<app::App> parent)
-        : m_parent_app(parent)
-    {
-    }
-    // Get a sync user for a given identity, or create one if none exists yet, and set its token.
-    // If a logged-out user exists, it will marked as logged back in.
-    virtual std::shared_ptr<SyncUser> get_user(std::string_view user_id, std::string_view refresh_token,
-                                               std::string_view access_token, std::string_view device_id) = 0;
+    using Data = std::pair<SyncUserData, AppUserData>;
 
-    // Get an existing user for a given identifier, if one exists and is logged in.
-    virtual std::shared_ptr<SyncUser> get_existing_logged_in_user(std::string_view user_id) const = 0;
+    virtual ~BackingStore();
 
-    // Get all the users that are logged in and not errored out.
-    virtual std::vector<std::shared_ptr<SyncUser>> all_users() = 0;
+    // these two go away with baseurl updating
+    virtual std::optional<app::AppMetadata> get_app_metadata() = 0;
+    virtual void set_app_metadata(const app::AppMetadata& metadata) = 0;
 
-    // Gets the currently active user.
-    virtual std::shared_ptr<SyncUser> get_current_user() const = 0;
+    // clean up dead users and perform pending file actions
+    virtual void perform_launch_actions(SyncFileManager& fm) = 0;
+    // Attempt to perform all pending file actions for the given path. Returns
+    // true if any were performed.
+    virtual bool immediately_run_file_actions(SyncFileManager& fm, std::string_view realm_path) = 0;
 
-    // Log out a given user
-    virtual void log_out_user(const SyncUser& user) = 0;
+    virtual void create_file_action(SyncFileAction action, std::string_view original_path, std::string_view recovery_path, std::string_view partition_value, std::string_view user_id) = 0;
 
-    // Sets the currently active user.
+    virtual Data get_user(std::string_view user_id) = 0;
+
+    // Create a user if no user with this id exists, or update only the given
+    // fields if one does
+    virtual void create_user(std::string_view user_id, std::string_view refresh_token,
+                             std::string_view access_token, std::string_view device_id) = 0;
+
+    // Update the stored data for an existing user
+    virtual void update_user(std::string_view user_id, const SyncUserData&, const AppUserData& data) = 0;
+
+    // Discard tokens, set state to the given one, and if the user is the current
+    // user set it to the new active user
+    virtual void log_out(std::string_view user_id, std::string_view new_active_user_id,
+                         UserState new_state) = 0;
+    virtual void delete_user(SyncFileManager& file_manager, std::string_view user_id,
+                             std::string_view new_active_user) = 0;
+
+    virtual std::string get_current_user() = 0;
     virtual void set_current_user(std::string_view user_id) = 0;
 
+    virtual std::vector<std::string> get_logged_in_users() = 0;
+
+    virtual void add_realm_path(std::string_view user_id, std::string_view path) = 0;
+};
+
+std::unique_ptr<BackingStore> create_backing_store(std::string path,
+                                                   RealmBackingStoreConfig::MetadataMode mode,
+                                                   std::optional<std::vector<char>> encryption_key,
+                                                   SyncFileManager& file_manager);
+
+class UserManager {
+public:
+    UserManager(std::shared_ptr<App> app, SyncFileManager& file_manager,
+                BackingStore& backing_store);
+    ~UserManager();
+
+    // Get a sync user for a given identity, or create one if none exists yet, and set its token.
+    // If a logged-out user exists, it will marked as logged back in.
+    std::shared_ptr<AppUser> get_user(std::string_view user_id, std::string_view refresh_token,
+                                               std::string_view access_token, std::string_view device_id)
+    REQUIRES(!m_user_mutex);
+
+    // Get an existing user for a given identifier, if one exists and is logged in.
+    std::shared_ptr<AppUser> get_existing_logged_in_user(std::string_view user_id) const
+    REQUIRES(!m_user_mutex);
+
+    // Get all the users that are logged in and not errored out.
+    std::vector<std::shared_ptr<AppUser>> all_users() REQUIRES(!m_user_mutex);
+
+    // Gets the currently active user.
+    std::shared_ptr<AppUser> get_current_user() REQUIRES(!m_user_mutex);
+
+    // Log out a given user
+    void log_out_user(AppUser& user, bool is_anonymous) REQUIRES(!m_user_mutex);
+
+    // Sets the currently active user.
+    void set_current_user(const std::shared_ptr<AppUser>& user) REQUIRES(!m_user_mutex);
+
     // Removes a user
-    virtual void remove_user(std::string_view user_id) = 0;
+    void remove_user(AppUser& user) REQUIRES(!m_user_mutex);
 
     // Permanently deletes a user.
-    virtual void delete_user(std::string_view user_id) = 0;
+    void delete_user(AppUser& user) REQUIRES(!m_user_mutex);
 
     // Destroy all users persisted state and mark oustanding User instances as Removed
     // clean up persisted state.
-    virtual void reset_for_testing() = 0;
+    void reset_for_testing() REQUIRES(!m_user_mutex);
 
-    // FIXME: this is an implementation detail leak and doesn't belong in this API
-    // FIXME: consider abstracting it to something called `on_manual_client_reset()`
-    // Immediately run file actions for a single Realm at a given original path.
-    // Returns whether or not a file action was successfully executed for the specified Realm.
-    // Preconditions: all references to the Realm at the given path must have already been invalidated.
-    // The metadata and file management subsystems must also have already been configured.
-    virtual bool immediately_run_file_actions(std::string_view original_name) = 0;
+private:
+    SyncFileManager& m_file_manager;
+    BackingStore& m_store;
 
-    // If the metadata manager is configured, perform an update. Returns `true` if the code was run.
-    virtual bool perform_metadata_update(util::FunctionRef<void(SyncMetadataManager&)> update_function) const = 0;
+    std::shared_ptr<AppUser> get_user_for_id(std::string_view user_id) const noexcept REQUIRES(m_user_mutex);
+    void remove_user(AppUser& user, bool delete_immediately);
 
-    // Get the default path for a Realm for the given SyncUser.
-    // The default value is `<rootDir>/<appId>/<userId>/<partitionValue>.realm`.
-    // If the file cannot be created at this location, for example due to path length restrictions,
-    // this function may pass back `<rootDir>/<hashedFileName>.realm`
-    // The `user` is required.
-    // If partition_value is empty, FLX sync is requested
-    // otherwise this is for a PBS Realm and the string
-    // is a BSON formatted value.
-    virtual std::string path_for_realm(std::shared_ptr<SyncUser> user,
-                                       std::optional<std::string> custom_file_name = std::nullopt,
-                                       std::optional<std::string> partition_value = std::nullopt) const = 0;
+    std::weak_ptr<App> m_app;
 
-    // Get the base path where audit Realms will be stored. This path may need to be created.
-    virtual std::string audit_path_root(std::shared_ptr<SyncUser> user, std::string_view app_id,
-                                        std::string_view partition_prefix) const = 0;
+    // Protects m_users
+    util::CheckedMutex m_user_mutex;
 
-    // Get the path of the recovery directory for backed-up or recovered Realms.
-    virtual std::string
-    recovery_directory_path(std::optional<std::string> const& custom_dir_name = std::nullopt) const = 0;
-
-    // Get the app metadata for the active app.
-    virtual std::optional<SyncAppMetadata> app_metadata() const = 0;
-
-protected:
-    // these methods allow only derived backing stores to construct SyncUsers
-    // because SyncUser has a private constructor but BackingStore is a friend class
-    std::shared_ptr<SyncUser> make_user(std::string_view refresh_token, std::string_view id,
-                                        std::string_view access_token, std::string_view device_id,
-                                        std::shared_ptr<app::App> app) const
-    {
-        return std::make_shared<SyncUser>(SyncUser::Private{}, refresh_token, id, access_token, device_id,
-                                          std::move(app));
-    }
-    std::shared_ptr<SyncUser> make_user(const SyncUserMetadata& data, std::shared_ptr<app::App> app) const
-    {
-        return std::make_shared<SyncUser>(SyncUser::Private{}, data, std::move(app));
-    }
-
-    std::weak_ptr<app::App> m_parent_app;
+    // A vector of all AppUser objects.
+    std::vector<std::shared_ptr<AppUser>> m_users GUARDED_BY(m_user_mutex);
+    std::shared_ptr<AppUser> m_current_user GUARDED_BY(m_user_mutex);
 };
 
 } // namespace app

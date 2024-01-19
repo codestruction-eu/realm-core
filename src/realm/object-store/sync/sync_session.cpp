@@ -251,7 +251,7 @@ void SyncSession::handle_bad_auth(const std::shared_ptr<SyncUser>& user, Status 
         cancel_pending_waits(std::move(lock), status);
     }
     if (user) {
-        user->log_out();
+        user->request_log_out(nullptr);
     }
 
     if (auto error_handler = config(&SyncConfig::error_handler)) {
@@ -395,11 +395,10 @@ SyncSession::SyncSession(Private, SyncClient& client, std::shared_ptr<DB> db, co
     }
 }
 
-std::shared_ptr<SyncManager> SyncSession::sync_manager() const
+SyncManager* SyncSession::sync_manager() const
 {
     util::CheckedLockGuard lk(m_state_mutex);
-    REALM_ASSERT(m_sync_manager);
-    return m_sync_manager->shared_from_this();
+    return m_sync_manager;
 }
 
 void SyncSession::detach_from_sync_manager()
@@ -411,26 +410,22 @@ void SyncSession::detach_from_sync_manager()
 
 void SyncSession::update_error_and_mark_file_for_deletion(SyncError& error, ShouldBackup should_backup)
 {
-    auto backing_store = user()->app().lock()->backing_store();
-    util::CheckedLockGuard config_lock(m_config_mutex);
-    // Add a SyncFileActionMetadata marking the Realm as needing to be deleted.
-    std::string recovery_path;
-    auto original_path = path();
-    error.user_info[SyncError::c_original_file_path_key] = original_path;
-    if (should_backup == ShouldBackup::yes) {
-        recovery_path = util::reserve_unique_file_name(
-            backing_store->recovery_directory_path(m_config.sync_config->recovery_directory),
-            util::create_timestamped_template("recovered_realm"));
-        error.user_info[SyncError::c_recovery_file_path_key] = recovery_path;
-    }
-    using Action = SyncFileActionMetadata::Action;
-    auto action = should_backup == ShouldBackup::yes ? Action::BackUpThenDeleteRealm : Action::DeleteRealm;
-    backing_store->perform_metadata_update([action, original_path = std::move(original_path),
-                                            recovery_path = std::move(recovery_path),
-                                            partition_value = m_config.sync_config->partition_value,
-                                            user_id = m_config.sync_config->user->user_id()](const auto& manager) {
-        manager.make_file_action_metadata(original_path, partition_value, user_id, action, recovery_path);
-    });
+//    auto app = user()->app().lock();
+//    util::CheckedLockGuard config_lock(m_config_mutex);
+//    // Add a SyncFileActionMetadata marking the Realm as needing to be deleted.
+//    std::string recovery_path;
+//    auto original_path = path();
+//    error.user_info[SyncError::c_original_file_path_key] = original_path;
+//    if (should_backup == ShouldBackup::yes) {
+//        recovery_path = util::reserve_unique_file_name(
+//                                                       app->sync_manager()->recovery_directory_path(m_config.sync_config->recovery_directory),
+//            util::create_timestamped_template("recovered_realm"));
+//        error.user_info[SyncError::c_recovery_file_path_key] = recovery_path;
+//    }
+//    using Action = SyncFileAction;
+//    auto action = should_backup == ShouldBackup::yes ? Action::BackUpThenDeleteRealm : Action::DeleteRealm;
+//    app->backing_store().create_file_action(action, original_path, recovery_path, m_config.sync_config->partition_value,
+//                                      m_config.sync_config->user->user_id());
 }
 
 void SyncSession::download_fresh_realm(sync::ProtocolErrorInfo::Action server_requests_action)
@@ -710,13 +705,13 @@ void SyncSession::handle_error(sync::SessionErrorInfo error)
                 return;
             case sync::ProtocolErrorInfo::Action::RefreshUser:
                 if (auto u = user()) {
-                    u->refresh_custom_data(false, handle_refresh(shared_from_this(), false));
+                    u->request_refresh_user(handle_refresh(shared_from_this(), false));
                     return;
                 }
                 break;
             case sync::ProtocolErrorInfo::Action::RefreshLocation:
                 if (auto u = user()) {
-                    u->refresh_custom_data(true, handle_refresh(shared_from_this(), true));
+                    u->request_refresh_location(handle_refresh(shared_from_this(), true));
                     return;
                 }
                 break;
@@ -769,7 +764,7 @@ void SyncSession::handle_error(sync::SessionErrorInfo error)
 
     if (log_out_user) {
         if (auto u = user())
-            u->log_out();
+            u->request_log_out(nullptr);
     }
 
     if (auto error_handler = config(&SyncConfig::error_handler)) {
@@ -1156,7 +1151,7 @@ void SyncSession::update_access_token(const std::string& signed_token)
 void SyncSession::initiate_access_token_refresh()
 {
     if (auto session_user = user()) {
-        session_user->refresh_custom_data(handle_refresh(shared_from_this(), false));
+        session_user->request_access_token(handle_refresh(shared_from_this(), false));
     }
 }
 

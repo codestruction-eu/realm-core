@@ -37,12 +37,10 @@
 #include <realm/object-store/sync/impl/emscripten/socket_provider.hpp>
 #endif
 
-namespace realm {
-namespace _impl {
+namespace realm::_impl {
 
 struct SyncClient {
-    SyncClient(const std::shared_ptr<util::Logger>& logger, SyncClientConfig const& config,
-               std::weak_ptr<const SyncManager> weak_sync_manager)
+    SyncClient(const std::shared_ptr<util::Logger>& logger, app::SyncClientConfig const& config)
         : m_socket_provider([&]() -> std::shared_ptr<sync::SyncSocketProvider> {
             if (config.socket_provider) {
                 return config.socket_provider;
@@ -80,13 +78,14 @@ struct SyncClient {
         , m_logger_ptr(logger)
         , m_logger(*m_logger_ptr)
 #if NETWORK_REACHABILITY_AVAILABLE
-        , m_reachability_observer(none, [weak_sync_manager](const NetworkReachabilityStatus status) {
-            if (status != NotReachable) {
-                if (auto sync_manager = weak_sync_manager.lock()) {
-                    sync_manager->reconnect();
-                }
-            }
-        })
+    , m_reachability_observer(none, [](NetworkReachabilityStatus) {})
+//        , m_reachability_observer(none, [weak_sync_manager](const NetworkReachabilityStatus status) {
+//            if (status != NotReachable) {
+//                if (auto sync_manager = weak_sync_manager.lock()) {
+//                    sync_manager->reconnect();
+//                }
+//            }
+//        })
     {
         if (!m_reachability_observer.start_observing())
             m_logger.error("Failed to set up network reachability observer");
@@ -132,8 +131,6 @@ struct SyncClient {
         m_client.wait_for_session_terminations_or_client_stopped();
     }
 
-    ~SyncClient() {}
-
 private:
     std::shared_ptr<sync::SyncSocketProvider> m_socket_provider;
     sync::Client m_client;
@@ -144,7 +141,6 @@ private:
 #endif
 };
 
-} // namespace _impl
-} // namespace realm
+} // namespace realm::_impl
 
 #endif // REALM_OS_SYNC_CLIENT_HPP

@@ -1306,7 +1306,7 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
             SyncTestFile config(app, partition, schema);
             auto r = Realm::get_shared_realm(config);
             REQUIRE_FALSE(user->is_logged_in());
-            REQUIRE(user->state() == SyncUser::State::LoggedOut);
+            REQUIRE(user->state() == UserState::LoggedOut);
         }
 
         SECTION("Requests that receive an error are retried on a backoff") {
@@ -1510,7 +1510,7 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
             // the user has been logged out, and current user is reset
             REQUIRE(!app->current_user());
             REQUIRE(!anon_user->is_logged_in());
-            REQUIRE(anon_user->state() == SyncUser::State::Removed);
+            REQUIRE(anon_user->state() == UserState::Removed);
 
             // new requests for an access token do not work for anon users
             anon_user->refresh_custom_data([&](Optional<AppError> error) {
@@ -1540,7 +1540,7 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
             }
             app->backing_store()->remove_user(user_id);
             REQUIRE_FALSE(email_user->is_logged_in());
-            REQUIRE(email_user->state() == SyncUser::State::Removed);
+            REQUIRE(email_user->state() == UserState::Removed);
 
             // should not be able to open a synced Realm with an invalid user
             REQUIRE_EXCEPTION(
@@ -1551,7 +1551,7 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
             std::shared_ptr<SyncUser> new_user_instance = log_in(app, creds);
             // the previous instance is still invalid
             REQUIRE_FALSE(email_user->is_logged_in());
-            REQUIRE(email_user->state() == SyncUser::State::Removed);
+            REQUIRE(email_user->state() == UserState::Removed);
             // but the new instance will work and has the same server issued ident
             REQUIRE(new_user_instance);
             REQUIRE(new_user_instance->is_logged_in());

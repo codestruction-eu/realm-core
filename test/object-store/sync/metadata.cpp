@@ -35,10 +35,34 @@
 using namespace realm;
 using namespace realm::util;
 using File = realm::util::File;
-using SyncAction = SyncFileActionMetadata::Action;
+using SyncAction = SyncFileAction;
 
 static const std::string base_path = util::make_temp_dir() + "realm_objectstore_sync_metadata";
 static const std::string metadata_path = base_path + "/metadata.realm";
+
+namespace {
+bool results_contains_user(SyncUserMetadataResults& results, const std::string& identity)
+{
+    for (size_t i = 0; i < results.size(); i++) {
+        auto this_result = results.get(i);
+        if (this_result.user_id() == identity) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool results_contains_original_name(SyncFileActionMetadataResults& results, const std::string& original_name)
+{
+    for (size_t i = 0; i < results.size(); i++) {
+        if (results.get(i).original_name() == original_name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}
 
 TEST_CASE("sync_metadata: user metadata", "[sync][metadata]") {
     util::try_make_dir(base_path);
@@ -123,7 +147,7 @@ TEST_CASE("sync_metadata: user metadata", "[sync][metadata]") {
             const auto user_id = "testcase1g3";
             auto first = manager.get_or_make_user_metadata(user_id);
             first.set_access_token(sample_token);
-            first.set_state(SyncUser::State::Removed);
+            first.set_state(UserState::Removed);
             auto second = manager.get_user_metadata(user_id);
             REQUIRE(!second);
         }
@@ -152,7 +176,7 @@ TEST_CASE("sync_metadata: user metadata APIs", "[sync][metadata]") {
         auto marked_users = manager.all_users_marked_for_removal();
         REQUIRE(marked_users.size() == 0);
         // Now, mark a few users for removal.
-        first.set_state(SyncUser::State::Removed);
+        first.set_state(UserState::Removed);
         unmarked_users = manager.all_unmarked_users();
         REQUIRE(unmarked_users.size() == 1);
         REQUIRE(results_contains_user(unmarked_users, user_id2));
@@ -295,14 +319,14 @@ TEST_CASE("sync_metadata: persistence across metadata manager instances", "[sync
         first.set_access_token(sample_token);
         REQUIRE(first.user_id() == user_id);
         REQUIRE(first.access_token() == sample_token);
-        REQUIRE(first.state() == SyncUser::State::LoggedIn);
-        first.set_state(SyncUser::State::LoggedOut);
+        REQUIRE(first.state() == UserState::LoggedIn);
+        first.set_state(UserState::LoggedOut);
 
         SyncMetadataManager second_manager(metadata_path, false);
         auto second = second_manager.get_user_metadata(user_id);
         REQUIRE(second->user_id() == user_id);
         REQUIRE(second->access_token() == sample_token);
-        REQUIRE(second->state() == SyncUser::State::LoggedOut);
+        REQUIRE(second->state() == UserState::LoggedOut);
     }
 }
 
@@ -480,7 +504,7 @@ TEST_CASE("sync metadata: can open old metadata realms", "[sync][metadata]") {
 #elif false // The code to generate the v6 Realm
         // Code to generate the v6 metadata Realm used to test the 6 -> 7 migration
         {
-            using State = SyncUser::State;
+            using State = UserState;
             SyncMetadataManager manager(metadata_path, false);
 
             auto user = manager.get_or_make_user_metadata("removed user", "");
@@ -579,14 +603,14 @@ TEST_CASE("sync metadata: can open old metadata realms", "[sync][metadata]") {
     }
 
     SECTION("open schema version 6") {
-        using State = SyncUser::State;
+        using State = UserState;
         File::copy(test_util::get_test_resource_path() + "sync-metadata-v6.realm", metadata_path);
         SyncMetadataManager manager(metadata_path, false);
 
-        SyncUserIdentity id_1{"identity 1", "a"};
-        SyncUserIdentity id_2{"identity 2", "b"};
-        SyncUserIdentity id_shared{"shared identity", "shared"};
-        const std::vector<SyncUserIdentity> all_ids = {id_1, id_shared, id_2};
+        AppUserIdentity id_1{"identity 1", "a"};
+        AppUserIdentity id_2{"identity 2", "b"};
+        AppUserIdentity id_shared{"shared identity", "shared"};
+        const std::vector<AppUserIdentity> all_ids = {id_1, id_shared, id_2};
         const std::vector<std::string> realm_files = {"file 1", "file 2", "file 3"};
 
         auto check_user = [&](const char* user_id, State state, const std::string& access_token,

@@ -683,7 +683,7 @@ std::shared_ptr<AuditRealmPool> AuditRealmPool::get_pool(std::shared_ptr<SyncUse
                                  }),
                   s_pools.end());
 
-    auto app_id = user->app().lock()->config().app_id;
+    auto app_id = user->app_id();
     auto it = std::find_if(s_pools.begin(), s_pools.end(), [&](auto& pool) {
         return pool.user_id == user->user_id() && pool.partition_prefix == partition_prefix && pool.app_id == app_id;
     });
@@ -706,7 +706,7 @@ AuditRealmPool::AuditRealmPool(Private, std::shared_ptr<SyncUser> user, std::str
     , m_partition_prefix(partition_prefix)
     , m_error_handler(error_handler)
     , m_path_root([&] {
-        return m_user->app().lock()->backing_store()->audit_path_root(m_user, app_id, partition_prefix);
+        return m_user->sync_manager()->audit_path_root(*m_user, app_id, partition_prefix);
     }())
     , m_logger(logger)
 {
@@ -836,7 +836,7 @@ void AuditRealmPool::scan_for_realms_to_upload()
         RealmConfig config;
         config.path = db->get_path();
         config.sync_config = std::make_shared<SyncConfig>(m_user, prefixed_partition(partition));
-        wait_for_upload(m_user->app().lock()->sync_manager()->get_session(db, config));
+        wait_for_upload(m_user->sync_manager()->get_session(db, config));
         return;
     }
 
@@ -1003,7 +1003,7 @@ AuditContext::AuditContext(std::shared_ptr<DB> source_db, RealmConfig const& par
     }
 
     if (!m_logger)
-        m_logger = audit_user->app().lock()->sync_manager()->get_logger();
+        m_logger = audit_user->sync_manager()->get_logger();
     if (!m_serializer)
         m_serializer = std::make_shared<AuditObjectSerializer>();
 

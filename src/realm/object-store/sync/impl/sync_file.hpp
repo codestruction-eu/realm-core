@@ -19,11 +19,9 @@
 #ifndef REALM_OS_SYNC_FILE_HPP
 #define REALM_OS_SYNC_FILE_HPP
 
-#include <string>
-
-#include <realm/object-store/sync/app.hpp>
-
 #include <realm/util/optional.hpp>
+
+#include <string>
 
 namespace realm {
 

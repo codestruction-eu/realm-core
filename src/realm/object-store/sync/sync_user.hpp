@@ -25,7 +25,6 @@
 #include <realm/util/bson/bson.hpp>
 #include <realm/util/checked_mutex.hpp>
 #include <realm/util/optional.hpp>
-#include <realm/table.hpp>
 
 #include <memory>
 #include <mutex>
@@ -76,7 +75,7 @@ struct RealmJWT {
     }
 };
 
-struct SyncUserProfile {
+struct AppUserProfile {
     // The full name of the user.
     util::Optional<std::string> name() const
     {
@@ -133,11 +132,11 @@ struct SyncUserProfile {
         return m_data;
     }
 
-    SyncUserProfile(bson::BsonDocument&& data)
+    AppUserProfile(bson::BsonDocument&& data)
         : m_data(std::move(data))
     {
     }
-    SyncUserProfile() = default;
+    AppUserProfile() = default;
 
 private:
     bson::BsonDocument m_data;
@@ -153,46 +152,74 @@ private:
 };
 
 // A struct that represents an identity that a `User` is linked to
-struct SyncUserIdentity {
+struct AppUserIdentity {
     // the id of the identity
     std::string id;
     // the associated provider type of the identity
     std::string provider_type;
 
-    SyncUserIdentity(const std::string& id, const std::string& provider_type);
+    AppUserIdentity(const std::string& id, const std::string& provider_type);
 
-    bool operator==(const SyncUserIdentity& other) const
+    bool operator==(const AppUserIdentity& other) const
     {
         return id == other.id && provider_type == other.provider_type;
     }
 
-    bool operator!=(const SyncUserIdentity& other) const
+    bool operator!=(const AppUserIdentity& other) const
     {
         return id != other.id || provider_type != other.provider_type;
     }
 };
 
-// A `SyncUser` represents a single user account. Each user manages the sessions that
-// are associated with it.
-class SyncUser : public std::enable_shared_from_this<SyncUser>, public Subscribable<SyncUser> {
-    friend class app::BackingStore; // only this is expected to construct a SyncUser
-    struct Private {};
+enum class UserState {
+    LoggedOut,
+    LoggedIn,
+    Removed,
+};
 
+struct SyncUserData {
+    // Current refresh token or empty if user is logged out
+    RealmJWT refresh_token;
+    // Current access token or empty if user is logged out
+    RealmJWT access_token;
+    // Current state of the user
+    UserState state;
+    // UUIDs which used to be used to generate local Realm file paths. Now only
+    // used to locate existing files.
+    std::vector<std::string> legacy_identities;
+};
+
+struct AppUserData {
+    // Identities which were used to log into this user
+    std::vector<AppUserIdentity> identities;
+    // Id for the device which this user was logged in on. Users are not
+    // portable between devices so this cannot be changed after the user
+    // is created
+    std::string device_id;
+    // Server-stored user profile
+    AppUserProfile profile;
+};
+
+class SyncUser;
+
+class UserProvider {
 public:
-    enum class State {
-        LoggedOut,
-        LoggedIn,
-        Removed,
-    };
+    virtual ~UserProvider() = 0;
 
-    // Log the user out and mark it as such. This will also close its associated Sessions.
-    void log_out() REQUIRES(!m_mutex, !m_tokens_mutex);
+    virtual void register_sync_user(SyncUser&) = 0;
+    virtual void unregister_sync_user(SyncUser&) = 0;
 
+    using CompletionHandler = util::UniqueFunction<void(std::optional<app::AppError>)>;
+    virtual void request_log_out(std::string_view user_id, CompletionHandler&&) = 0;
+    virtual void request_refresh_user(std::string_view user_id, CompletionHandler&&) = 0;
+    virtual void request_refresh_location(std::string_view user_id, CompletionHandler&&) = 0;
+    virtual void request_access_token(std::string_view user_id, CompletionHandler&&) = 0;
+};
+
+class SyncUser {
+public:
     /// Returns true if the users access_token and refresh_token are set.
-    bool is_logged_in() const REQUIRES(!m_mutex, !m_tokens_mutex);
-
-    /// Returns true if the user's only identity is anonymous.
-    bool is_anonymous() const REQUIRES(!m_mutex, !m_tokens_mutex);
+    bool is_logged_in() const REQUIRES(!m_mutex);
 
     /// Server-supplied unique id for this user.
     const std::string& user_id() const noexcept
@@ -200,62 +227,102 @@ public:
         return m_user_id;
     }
 
+    const std::string& app_id() const noexcept
+    {
+        return m_app_id;
+    }
+
     const std::vector<std::string>& legacy_identities() const noexcept
     {
-        return m_legacy_identities;
+        return m_data.legacy_identities;
     }
 
-    std::string access_token() const REQUIRES(!m_tokens_mutex);
-    std::string refresh_token() const REQUIRES(!m_tokens_mutex);
+    std::string access_token() const REQUIRES(!m_mutex);
+    std::string refresh_token() const REQUIRES(!m_mutex);
+    UserState state() const REQUIRES(!m_mutex);
+
+    SyncUser(std::shared_ptr<UserProvider>, std::shared_ptr<SyncManager>, std::string_view app_id, std::string_view user_id);
+    ~SyncUser();
+    SyncUser(const SyncUser&) = delete;
+    SyncUser& operator=(const SyncUser&) = delete;
+
+    // Atomically set the user to be logged in and update both tokens.
+    void update_backing_data(SyncUserData&& data) REQUIRES(!m_mutex);
+
+    /// Checks the expiry on the access token against the local time and if it is invalid or expires soon, returns
+    /// true.
+    bool access_token_refresh_required() const REQUIRES(!m_mutex);
+
+    // Hook for testing access token timeouts
+    void set_seconds_to_adjust_time_for_testing(int seconds)
+    {
+        m_seconds_to_adjust_time_for_testing.store(seconds);
+    }
+
+    void detach_from_provider() REQUIRES(!m_mutex);
+
+    std::shared_ptr<SyncManager> sync_manager() REQUIRES(!m_mutex)
+    {
+        util::CheckedLockGuard lock(m_mutex);
+        return m_sync_manager;
+    }
+
+    void request_log_out(util::UniqueFunction<void(util::Optional<app::AppError>)>&&) REQUIRES(!m_mutex);
+    void request_refresh_user(util::UniqueFunction<void(util::Optional<app::AppError>)>&&) REQUIRES(!m_mutex);
+    void request_refresh_location(util::UniqueFunction<void(util::Optional<app::AppError>)>&&) REQUIRES(!m_mutex);
+    void request_access_token(util::UniqueFunction<void(util::Optional<app::AppError>)>&&) REQUIRES(!m_mutex);
+
+protected:
+    util::CheckedMutex m_mutex;
+    std::shared_ptr<UserProvider> m_provider;
+    std::shared_ptr<SyncManager> m_sync_manager;
+    const std::string m_app_id;
+    const std::string m_user_id;
+    SyncUserData m_data GUARDED_BY(m_mutex);
+    std::atomic<int> m_seconds_to_adjust_time_for_testing = 0;
+};
+
+class AppUser final : public SyncUser, public std::enable_shared_from_this<AppUser>, public Subscribable<AppUser> {
+    struct Private {};
+    using SyncUser::m_mutex;
+
+public:
+    // Log the user out and mark it as such. This will also close its associated Sessions.
+    void log_out() REQUIRES(!m_mutex);
+
+    /// Returns true if the user's only identity is anonymous.
+    bool is_anonymous() const REQUIRES(!m_mutex);
+
     std::string device_id() const REQUIRES(!m_mutex);
     bool has_device_id() const REQUIRES(!m_mutex);
-    SyncUserProfile user_profile() const REQUIRES(!m_mutex);
-    std::vector<SyncUserIdentity> identities() const REQUIRES(!m_mutex);
-    State state() const REQUIRES(!m_mutex);
+    AppUserProfile user_profile() const REQUIRES(!m_mutex);
+    std::vector<AppUserIdentity> identities() const REQUIRES(!m_mutex);
 
     // Custom user data embedded in the access token.
-    util::Optional<bson::BsonDocument> custom_data() const REQUIRES(!m_tokens_mutex);
-
-    std::shared_ptr<SyncUserContext> binding_context() const
-    {
-        return m_binding_context.load();
-    }
-
-    // Optionally set a context factory. If so, must be set before any sessions are created.
-    static void set_binding_context_factory(SyncUserContextFactory factory);
+    util::Optional<bson::BsonDocument> custom_data() const REQUIRES(!m_mutex);
 
     // Get the app instance that this user belongs to.
-    // This may not lock() if this SyncUser has become detached.
-    std::weak_ptr<app::App> app() const REQUIRES(!m_mutex);
+//    std::shared_ptr<app::App> app() const REQUIRES(!m_mutex);
 
     /// Retrieves a general-purpose service client for the Realm Cloud service
     /// @param service_name The name of the cluster
-    app::MongoClient mongo_client(const std::string& service_name) REQUIRES(!m_mutex);
+//    app::MongoClient mongo_client(const std::string& service_name) REQUIRES(!m_mutex);
 
     // ------------------------------------------------------------------------
     // All of the following are called by `RealmBackingStore` and are public only for
     // testing purposes. SDKs should not call these directly in non-test code
     // or expose them in the public API.
 
-    // Don't use this directly; use the `BackingStore` APIs. Public for use with `make_shared`.
-    SyncUser(Private, std::string_view refresh_token, std::string_view id, std::string_view access_token,
-             std::string_view device_id, std::shared_ptr<app::App> app);
-    SyncUser(Private, const SyncUserMetadata& data, std::shared_ptr<app::App> app);
-    SyncUser(const SyncUser&) = delete;
-    SyncUser& operator=(const SyncUser&) = delete;
+    static std::shared_ptr<AppUser> make(std::shared_ptr<app::App> app, std::string_view user_id)
+    {
+        return std::make_shared<AppUser>(Private(), std::move(app), user_id);
+    }
+
+    AppUser(Private, std::shared_ptr<app::App> app, std::string_view user_id);
+    ~AppUser();
 
     // Atomically set the user to be logged in and update both tokens.
-    void log_in(std::string_view access_token, std::string_view refresh_token) REQUIRES(!m_mutex, !m_tokens_mutex);
-
-    // Atomically set the user to be removed and remove tokens.
-    void invalidate() REQUIRES(!m_mutex, !m_tokens_mutex);
-
-    // Update the user's access token. If the user is logged out, it will log itself back in.
-    // Note that this is called by the SyncManager, and should not be directly called.
-    void update_access_token(std::string&& token) REQUIRES(!m_mutex, !m_tokens_mutex);
-
-    // Update the user's profile and identities.
-    void update_user_profile(std::vector<SyncUserIdentity> identities, SyncUserProfile profile) REQUIRES(!m_mutex);
+    void update_backing_data(std::pair<SyncUserData, AppUserData>&& data) REQUIRES(!m_mutex);
 
     /// Refreshes the custom data for this user
     /// If `update_location` is true, the location metadata will be queried before the request
@@ -265,64 +332,21 @@ public:
     void refresh_custom_data(util::UniqueFunction<void(util::Optional<app::AppError>)> completion_block)
         REQUIRES(!m_mutex);
 
-    /// Checks the expiry on the access token against the local time and if it is invalid or expires soon, returns
-    /// true.
-    bool access_token_refresh_required() const REQUIRES(!m_tokens_mutex);
-
-    // Hook for testing access token timeouts
-    void set_seconds_to_adjust_time_for_testing(int seconds)
-    {
-        m_seconds_to_adjust_time_for_testing.store(seconds);
-    }
-
     // FIXME: Not for public use.
     void detach_from_backing_store() REQUIRES(!m_mutex);
 
 private:
-    static SyncUserContextFactory s_binding_context_factory;
-    static std::mutex s_binding_context_factory_mutex;
-
     bool do_is_anonymous() const REQUIRES(m_mutex);
-
-    State m_state GUARDED_BY(m_mutex);
-
-    util::AtomicSharedPtr<SyncUserContext> m_binding_context;
-
-    // UUIDs which used to be used to generate local Realm file paths. Now only
-    // used to locate existing files.
-    std::vector<std::string> m_legacy_identities;
-
-    mutable util::CheckedMutex m_mutex;
-
-    // Set by the server. The unique ID of the user account on the Realm Application.
-    const std::string m_user_id;
-
-    mutable util::CheckedMutex m_tokens_mutex;
-
-    // The user's refresh token.
-    RealmJWT m_refresh_token GUARDED_BY(m_tokens_mutex);
-
-    // The user's access token.
-    RealmJWT m_access_token GUARDED_BY(m_tokens_mutex);
-
-    // The identities associated with this user.
-    std::vector<SyncUserIdentity> m_user_identities GUARDED_BY(m_mutex);
-
-    SyncUserProfile m_user_profile GUARDED_BY(m_mutex);
-
-    const std::string m_device_id;
-
-    std::weak_ptr<app::App> m_app;
-
-    std::atomic<int> m_seconds_to_adjust_time_for_testing = 0;
+    AppUserData m_app_data GUARDED_BY(m_mutex);
+    std::shared_ptr<app::App> m_app;
 };
 
 } // namespace realm
 
 namespace std {
 template <>
-struct hash<realm::SyncUserIdentity> {
-    size_t operator()(realm::SyncUserIdentity const&) const;
+struct hash<realm::AppUserIdentity> {
+    size_t operator()(realm::AppUserIdentity const&) const;
 };
 } // namespace std
 

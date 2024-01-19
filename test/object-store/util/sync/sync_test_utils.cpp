@@ -40,27 +40,6 @@
 
 namespace realm {
 
-bool results_contains_user(SyncUserMetadataResults& results, const std::string& identity)
-{
-    for (size_t i = 0; i < results.size(); i++) {
-        auto this_result = results.get(i);
-        if (this_result.user_id() == identity) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool results_contains_original_name(SyncFileActionMetadataResults& results, const std::string& original_name)
-{
-    for (size_t i = 0; i < results.size(); i++) {
-        if (results.get(i).original_name() == original_name) {
-            return true;
-        }
-    }
-    return false;
-}
-
 bool ReturnsTrueWithinTimeLimit::match(util::FunctionRef<bool()> condition) const
 {
     const auto wait_start = std::chrono::steady_clock::now();
