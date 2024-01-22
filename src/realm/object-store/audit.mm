@@ -26,7 +26,6 @@
 #include <realm/object-store/object_store.hpp>
 #include <realm/object-store/property.hpp>
 #include <realm/object-store/schema.hpp>
-#include <realm/object-store/sync/app.hpp>
 #include <realm/object-store/sync/sync_manager.hpp>
 #include <realm/object-store/sync/sync_session.hpp>
 #include <realm/object-store/sync/sync_user.hpp>
@@ -683,9 +682,9 @@ std::shared_ptr<AuditRealmPool> AuditRealmPool::get_pool(std::shared_ptr<SyncUse
                                  }),
                   s_pools.end());
 
-    auto app_id = user->sync_manager()->app().lock()->config().app_id;
+    auto app_id = user->app_id();
     auto it = std::find_if(s_pools.begin(), s_pools.end(), [&](auto& pool) {
-        return pool.user_identity == user->identity() && pool.partition_prefix == partition_prefix &&
+        return pool.user_identity == user->user_id() && pool.partition_prefix == partition_prefix &&
                pool.app_id == app_id;
     });
     if (it != s_pools.end()) {
@@ -696,7 +695,7 @@ std::shared_ptr<AuditRealmPool> AuditRealmPool::get_pool(std::shared_ptr<SyncUse
 
     auto pool = std::make_shared<AuditRealmPool>(Private(), user, partition_prefix, error_handler, logger, app_id);
     pool->scan_for_realms_to_upload();
-    s_pools.push_back({user->identity(), partition_prefix, app_id, pool});
+    s_pools.push_back({user->user_id(), partition_prefix, app_id, pool});
     return pool;
 }
 
@@ -714,7 +713,7 @@ AuditRealmPool::AuditRealmPool(Private, std::shared_ptr<SyncUser> user, std::str
         const char separator[] = "/";
 #endif
         // "$root/realm-audit/$appId/$userId/$partitonPrefix/"
-        return util::format("%2%1realm-audit%1%3%1%4%1%5%1", separator, base_file_path, app_id, m_user->identity(),
+        return util::format("%2%1realm-audit%1%3%1%4%1%5%1", separator, base_file_path, app_id, m_user->user_id(),
                             partition_prefix);
     }())
     , m_logger(logger)

@@ -32,7 +32,6 @@
 #include <realm/object-store/util/scheduler.hpp>
 
 #if REALM_ENABLE_SYNC
-#include <realm/object-store/sync/impl/sync_file.hpp>
 #include <realm/object-store/sync/async_open_task.hpp>
 #include <realm/object-store/sync/sync_manager.hpp>
 #include <realm/object-store/sync/sync_session.hpp>

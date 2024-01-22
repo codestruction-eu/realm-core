@@ -20,10 +20,7 @@
 
 #include <realm/object-store/thread_safe_reference.hpp>
 #include <realm/object-store/impl/realm_coordinator.hpp>
-#include <realm/object-store/sync/app.hpp>
 #include <realm/object-store/sync/impl/sync_client.hpp>
-#include <realm/object-store/sync/impl/sync_file.hpp>
-#include <realm/object-store/sync/impl/sync_metadata.hpp>
 #include <realm/object-store/sync/sync_manager.hpp>
 #include <realm/object-store/sync/sync_user.hpp>
 #include <realm/object-store/util/scheduler.hpp>
@@ -269,122 +266,13 @@ void SyncSession::handle_bad_auth(const std::shared_ptr<SyncUser>& user, Status 
         cancel_pending_waits(std::move(lock), status);
     }
     if (user) {
-        user->log_out();
+        user->request_action(sync::ProtocolErrorInfo::Action::LogOutUser);
     }
 
     if (auto error_handler = config(&SyncConfig::error_handler)) {
         auto user_facing_error = SyncError({ErrorCodes::AuthError, status.reason()}, true);
         error_handler(shared_from_this(), std::move(user_facing_error));
     }
-}
-
-static bool check_for_auth_failure(const app::AppError& error)
-{
-    using namespace realm::sync;
-    // Auth failure is returned as a 401 (unauthorized) or 403 (forbidden) response
-    if (error.additional_status_code) {
-        auto status_code = HTTPStatus(*error.additional_status_code);
-        if (status_code == HTTPStatus::Unauthorized || status_code == HTTPStatus::Forbidden)
-            return true;
-    }
-
-    return false;
-}
-
-static bool check_for_redirect_response(const app::AppError& error)
-{
-    using namespace realm::sync;
-    // Check for unhandled 301/308 permanent redirect response
-    if (error.additional_status_code) {
-        auto status_code = HTTPStatus(*error.additional_status_code);
-        if (status_code == HTTPStatus::MovedPermanently || status_code == HTTPStatus::PermanentRedirect)
-            return true;
-    }
-
-    return false;
-}
-
-util::UniqueFunction<void(util::Optional<app::AppError>)>
-SyncSession::handle_refresh(const std::shared_ptr<SyncSession>& session, bool restart_session)
-{
-    return [session, restart_session](util::Optional<app::AppError> error) {
-        auto session_user = session->user();
-        if (!session_user) {
-            util::CheckedUniqueLock lock(session->m_state_mutex);
-            auto refresh_error = error ? error->to_status() : Status::OK();
-            session->cancel_pending_waits(std::move(lock), refresh_error);
-        }
-        else if (error) {
-            if (error->code() == ErrorCodes::ClientAppDeallocated) {
-                return; // this response came in after the app shut down, ignore it
-            }
-            else if (!session->get_sync_route()) {
-                // If the sync route is empty at this point, it means the forced location update
-                // failed while trying to start a sync session with a cached user and no other
-                // AppServices HTTP requests have been performed since the App was created.
-                // Since a valid websocket host url is not available, fail the SyncSession start
-                // and pass the error to the user.
-                // This function will not log out the user, since it is not known at this point
-                // whether or not the user is valid.
-                session->handle_location_update_failed(
-                    {error->code(), util::format("Unable to reach the server: %1", error->reason())});
-            }
-            else if (ErrorCodes::error_categories(error->code()).test(ErrorCategory::client_error)) {
-                // any other client errors other than app_deallocated are considered fatal because
-                // there was a problem locally before even sending the request to the server
-                // eg. ClientErrorCode::user_not_found, ClientErrorCode::user_not_logged_in,
-                // ClientErrorCode::too_many_redirects
-                session->handle_bad_auth(session_user, error->to_status());
-            }
-            else if (check_for_auth_failure(*error)) {
-                // A 401 response on a refresh request means that the token cannot be refreshed and we should not
-                // retry. This can be because an admin has revoked this user's sessions, the user has been disabled,
-                // or the refresh token has expired according to the server's clock.
-                session->handle_bad_auth(
-                    session_user,
-                    {error->code(), util::format("Unable to refresh the user access token: %1", error->reason())});
-            }
-            else if (check_for_redirect_response(*error)) {
-                // A 301 or 308 response is an unhandled permanent redirect response (which should not happen) - if
-                // this is received, fail the request with an appropriate error message.
-                // Temporary redirect responses (302, 307) are not supported
-                session->handle_bad_auth(
-                    session_user,
-                    {error->code(), util::format("Unhandled redirect response when trying to reach the server: %1",
-                                                 error->reason())});
-            }
-            else {
-                // A refresh request has failed. This is an unexpected non-fatal error and we would
-                // like to retry but we shouldn't do this immediately in order to not swamp the
-                // server with requests. Consider two scenarios:
-                // 1) If this request was spawned from the proactive token check, or a user
-                // initiated request, the token may actually be valid. Just advance to Active
-                // from WaitingForAccessToken if needed and let the sync server tell us if the
-                // token is valid or not. If this also fails we will end up in case 2 below.
-                // 2) If the sync connection initiated the request because the server is
-                // unavailable or the connection otherwise encounters an unexpected error, we want
-                // to let the sync client attempt to reinitialize the connection using its own
-                // internal backoff timer which will happen automatically so nothing needs to
-                // happen here.
-                util::CheckedUniqueLock lock(session->m_state_mutex);
-                if (session->m_state == State::WaitingForAccessToken) {
-                    session->become_active();
-                }
-            }
-        }
-        else {
-            // If the session needs to be restarted, then restart the session now
-            // The latest access token and server url will be pulled from the sync
-            // manager when the new session is started.
-            if (restart_session) {
-                session->restart_session();
-            }
-            // Otherwise, update the access token and reconnect
-            else {
-                session->update_access_token(session_user->access_token());
-            }
-        }
-    };
 }
 
 SyncSession::SyncSession(Private, SyncClient& client, std::shared_ptr<DB> db, const RealmConfig& config,
@@ -441,25 +329,26 @@ void SyncSession::detach_from_sync_manager()
 
 void SyncSession::update_error_and_mark_file_for_deletion(SyncError& error, ShouldBackup should_backup)
 {
-    util::CheckedLockGuard config_lock(m_config_mutex);
-    // Add a SyncFileActionMetadata marking the Realm as needing to be deleted.
-    std::string recovery_path;
-    auto original_path = path();
-    error.user_info[SyncError::c_original_file_path_key] = original_path;
-    if (should_backup == ShouldBackup::yes) {
-        recovery_path = util::reserve_unique_file_name(
-            m_sync_manager->recovery_directory_path(m_config.sync_config->recovery_directory),
-            util::create_timestamped_template("recovered_realm"));
-        error.user_info[SyncError::c_recovery_file_path_key] = recovery_path;
-    }
-    using Action = SyncFileActionMetadata::Action;
-    auto action = should_backup == ShouldBackup::yes ? Action::BackUpThenDeleteRealm : Action::DeleteRealm;
-    m_sync_manager->perform_metadata_update([action, original_path = std::move(original_path),
-                                             recovery_path = std::move(recovery_path),
-                                             partition_value = m_config.sync_config->partition_value,
-                                             identity = m_config.sync_config->user->identity()](const auto& manager) {
-        manager.make_file_action_metadata(original_path, partition_value, identity, action, recovery_path);
-    });
+    //    util::CheckedLockGuard config_lock(m_config_mutex);
+    //    // Add a SyncFileActionMetadata marking the Realm as needing to be deleted.
+    //    std::string recovery_path;
+    //    auto original_path = path();
+    //    error.user_info[SyncError::c_original_file_path_key] = original_path;
+    //    if (should_backup == ShouldBackup::yes) {
+    //        recovery_path = util::reserve_unique_file_name(
+    //            m_sync_manager->recovery_directory_path(m_config.sync_config->recovery_directory),
+    //            util::create_timestamped_template("recovered_realm"));
+    //        error.user_info[SyncError::c_recovery_file_path_key] = recovery_path;
+    //    }
+    //    using Action = SyncFileActionMetadata::Action;
+    //    auto action = should_backup == ShouldBackup::yes ? Action::BackUpThenDeleteRealm : Action::DeleteRealm;
+    //    m_sync_manager->perform_metadata_update([action, original_path = std::move(original_path),
+    //                                             recovery_path = std::move(recovery_path),
+    //                                             partition_value = m_config.sync_config->partition_value,
+    //                                             identity = m_config.sync_config->user->identity()](const auto&
+    //                                             manager) {
+    //        manager.make_file_action_metadata(original_path, partition_value, identity, action, recovery_path);
+    //    });
 }
 
 void SyncSession::download_fresh_realm(sync::ProtocolErrorInfo::Action server_requests_action)
@@ -694,7 +583,6 @@ void SyncSession::handle_error(sync::SessionErrorInfo error)
     enum class NextStateAfterError { none, inactive, error };
     auto next_state = error.is_fatal ? NextStateAfterError::error : NextStateAfterError::none;
     util::Optional<ShouldBackup> delete_file;
-    bool log_out_user = false;
     bool unrecognized_by_client = false;
 
     if (error.status == ErrorCodes::AutoClientResetFailed) {
@@ -763,21 +651,12 @@ void SyncSession::handle_error(sync::SessionErrorInfo error)
                 download_fresh_realm(error.server_requests_action);
                 return;
             case sync::ProtocolErrorInfo::Action::RefreshUser:
-                if (auto u = user()) {
-                    u->refresh_custom_data(false, handle_refresh(shared_from_this(), false));
-                    return;
-                }
-                break;
             case sync::ProtocolErrorInfo::Action::RefreshLocation:
+            case sync::ProtocolErrorInfo::Action::LogOutUser:
                 if (auto u = user()) {
-                    u->refresh_custom_data(true, handle_refresh(shared_from_this(), true));
+                    u->request_action(error.server_requests_action);
                     return;
                 }
-                break;
-            case sync::ProtocolErrorInfo::Action::LogOutUser:
-                next_state = NextStateAfterError::inactive;
-                log_out_user = true;
-                break;
             case sync::ProtocolErrorInfo::Action::MigrateSchema:
                 util::CheckedUniqueLock lock(m_state_mutex);
                 // Should only be received for FLX sync.
@@ -825,11 +704,6 @@ void SyncSession::handle_error(sync::SessionErrorInfo error)
             cancel_pending_waits(std::move(lock), sync_error.status);
             break;
         }
-    }
-
-    if (log_out_user) {
-        if (auto u = user())
-            u->log_out();
     }
 
     if (auto error_handler = config(&SyncConfig::error_handler)) {
@@ -934,7 +808,7 @@ void SyncSession::create_sync_session()
 
     sync::Session::Config session_config;
     session_config.signed_user_token = sync_config.user->access_token();
-    session_config.user_id = sync_config.user->identity();
+    session_config.user_id = sync_config.user->user_id();
     session_config.realm_identifier = sync_config.partition_value;
     session_config.verify_servers_ssl_certificate = sync_config.client_validate_ssl;
     session_config.ssl_trust_certificate_path = sync_config.ssl_trust_certificate_path;
@@ -1233,7 +1107,7 @@ void SyncSession::update_access_token(const std::string& signed_token)
 void SyncSession::initiate_access_token_refresh()
 {
     if (auto session_user = user()) {
-        session_user->refresh_custom_data(handle_refresh(shared_from_this(), false));
+        session_user->request_access_token_refresh();
     }
 }
 

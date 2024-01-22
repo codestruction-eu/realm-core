@@ -18,11 +18,6 @@
 
 #include <realm/object-store/sync/sync_user.hpp>
 
-#include <realm/object-store/sync/app.hpp>
-#include <realm/object-store/sync/app_credentials.hpp>
-#include <realm/object-store/sync/generic_network_transport.hpp>
-#include <realm/object-store/sync/impl/sync_metadata.hpp>
-#include <realm/object-store/sync/mongo_client.hpp>
 #include <realm/object-store/sync/sync_manager.hpp>
 #include <realm/object-store/sync/sync_session.hpp>
 
@@ -53,7 +48,7 @@ static std::vector<std::string> split_token(const std::string& jwt)
     parts.push_back(jwt.substr(start_from));
 
     if (parts.size() != 3) {
-        throw app::AppError(ErrorCodes::BadToken, "jwt missing parts");
+        throw RuntimeError(ErrorCodes::BadToken, "jwt missing parts");
     }
 
     return parts;
@@ -75,77 +70,48 @@ RealmJWT::RealmJWT(const std::string& token)
     }
 }
 
-SyncUserIdentity::SyncUserIdentity(const std::string& id, const std::string& provider_type)
-    : id(id)
-    , provider_type(provider_type)
-{
-}
-
 SyncUserContextFactory SyncUser::s_binding_context_factory;
 std::mutex SyncUser::s_binding_context_factory_mutex;
 
-SyncUser::SyncUser(Private, const std::string& refresh_token, const std::string& id, const std::string& access_token,
-                   const std::string& device_id, SyncManager* sync_manager)
-    : m_state(State::LoggedIn)
-    , m_identity(id)
-    , m_refresh_token(RealmJWT(refresh_token))
-    , m_access_token(RealmJWT(access_token))
-    , m_device_id(device_id)
+SyncUser::SyncUser(Private, std::string_view user_id, SyncManager* sync_manager, UserProvider* provider)
+    : m_user_id(user_id)
+    , m_data(provider->get_user_data(user_id))
     , m_sync_manager(sync_manager)
+    , m_provider(provider)
 {
-    REALM_ASSERT(!access_token.empty() && !refresh_token.empty());
     {
         std::lock_guard lock(s_binding_context_factory_mutex);
         if (s_binding_context_factory) {
             m_binding_context = s_binding_context_factory();
         }
     }
-
-    m_sync_manager->perform_metadata_update([&](const auto& manager) NO_THREAD_SAFETY_ANALYSIS {
-        auto metadata = manager.get_or_make_user_metadata(m_identity);
-        metadata->set_state_and_tokens(State::LoggedIn, m_access_token.token, m_refresh_token.token);
-        metadata->set_device_id(m_device_id);
-        m_legacy_identities = metadata->legacy_identities();
-        this->m_user_profile = metadata->profile();
+    auto weak_self = weak_from_this(); // pretend this works
+    provider->set_user_change_callback(user_id, [weak_self](auto new_data) {
+        if (auto self = weak_self.lock()) {
+            self->m_data = std::move(new_data);
+            for (auto& session : self->all_sessions()) {
+                session->force_close();
+                if (self->m_data.state == UserData::State::LoggedIn) {
+                    session->revive_if_needed();
+                }
+            }
+            self->emit_change_to_subscribers(*self);
+        }
     });
 }
 
-SyncUser::SyncUser(Private, const SyncUserMetadata& data, SyncManager* sync_manager)
-    : m_state(data.state())
-    , m_legacy_identities(data.legacy_identities())
-    , m_identity(data.identity())
-    , m_refresh_token(RealmJWT(data.refresh_token()))
-    , m_access_token(RealmJWT(data.access_token()))
-    , m_user_identities(data.identities())
-    , m_user_profile(data.profile())
-    , m_device_id(data.device_id())
-    , m_sync_manager(sync_manager)
+SyncUser::~SyncUser()
 {
-    // Check for inconsistent state in the metadata Realm. This shouldn't happen,
-    // but previous versions could sometimes mark a user as logged in with an
-    // empty refresh token.
-    if (m_state == State::LoggedIn && (m_refresh_token.token.empty() || m_access_token.token.empty())) {
-        m_state = State::LoggedOut;
-        m_refresh_token = {};
-        m_access_token = {};
-    }
-
-    {
-        std::lock_guard lock(s_binding_context_factory_mutex);
-        if (s_binding_context_factory) {
-            m_binding_context = s_binding_context_factory();
-        }
-    }
+    m_provider->set_user_change_callback(user_id(), nullptr);
 }
 
 std::shared_ptr<SyncManager> SyncUser::sync_manager() const
 {
     util::CheckedLockGuard lk(m_mutex);
-    if (m_state == State::Removed) {
-        throw app::AppError(
+    if (m_data.state == UserData::State::Removed) {
+        throw RuntimeError(
             ErrorCodes::ClientUserNotFound,
-            util::format("Cannot start a sync session for user '%1' because this user has been removed.",
-                         m_identity));
+            util::format("Cannot start a sync session for user '%1' because this user has been removed.", m_user_id));
     }
     REALM_ASSERT(m_sync_manager);
     return m_sync_manager->shared_from_this();
@@ -155,15 +121,17 @@ void SyncUser::detach_from_sync_manager()
 {
     util::CheckedLockGuard lk(m_mutex);
     REALM_ASSERT(m_sync_manager);
-    m_state = SyncUser::State::Removed;
+    m_provider->set_user_change_callback(user_id(), nullptr);
+    m_data.state = UserData::State::Removed;
     m_sync_manager = nullptr;
+    m_provider = nullptr;
 }
 
 std::vector<std::shared_ptr<SyncSession>> SyncUser::all_sessions()
 {
     util::CheckedLockGuard lock(m_mutex);
     std::vector<std::shared_ptr<SyncSession>> sessions;
-    if (m_state == State::Removed) {
+    if (m_data.state == UserData::State::Removed) {
         return sessions;
     }
     for (auto it = m_sessions.begin(); it != m_sessions.end();) {
@@ -181,7 +149,7 @@ std::vector<std::shared_ptr<SyncSession>> SyncUser::all_sessions()
 std::shared_ptr<SyncSession> SyncUser::session_for_on_disk_path(const std::string& path)
 {
     util::CheckedLockGuard lock(m_mutex);
-    if (m_state == State::Removed) {
+    if (m_data.state == UserData::State::Removed) {
         return nullptr;
     }
     auto it = m_sessions.find(path);
@@ -196,239 +164,49 @@ std::shared_ptr<SyncSession> SyncUser::session_for_on_disk_path(const std::strin
     return locked;
 }
 
-void SyncUser::log_in(const std::string& access_token, const std::string& refresh_token)
-{
-    REALM_ASSERT(!access_token.empty());
-    REALM_ASSERT(!refresh_token.empty());
-    std::vector<std::shared_ptr<SyncSession>> sessions_to_revive;
-    {
-        util::CheckedLockGuard lock1(m_mutex);
-        util::CheckedLockGuard lock2(m_tokens_mutex);
-        m_state = State::LoggedIn;
-        m_access_token = RealmJWT(access_token);
-        m_refresh_token = RealmJWT(refresh_token);
-        sessions_to_revive = revive_sessions();
-
-        m_sync_manager->perform_metadata_update([&](const auto& manager) {
-            auto metadata = manager.get_or_make_user_metadata(m_identity);
-            metadata->set_state_and_tokens(State::LoggedIn, access_token, refresh_token);
-        });
-    }
-    // (Re)activate all pending sessions.
-    // Note that we do this after releasing the lock, since the session may
-    // need to access protected User state in the process of binding itself.
-    for (auto& session : sessions_to_revive) {
-        session->revive_if_needed();
-    }
-
-    emit_change_to_subscribers(*this);
-}
-
-void SyncUser::invalidate()
-{
-    {
-        util::CheckedLockGuard lock1(m_mutex);
-        util::CheckedLockGuard lock2(m_tokens_mutex);
-        m_state = State::Removed;
-        m_access_token = {};
-        m_refresh_token = {};
-
-        m_sync_manager->perform_metadata_update([&](const auto& manager) {
-            auto metadata = manager.get_or_make_user_metadata(m_identity);
-            metadata->set_state_and_tokens(State::Removed, "", "");
-        });
-    }
-    emit_change_to_subscribers(*this);
-}
-
-std::vector<std::shared_ptr<SyncSession>> SyncUser::revive_sessions()
-{
-    std::vector<std::shared_ptr<SyncSession>> sessions_to_revive;
-    sessions_to_revive.reserve(m_waiting_sessions.size());
-    for (auto& [path, weak_session] : m_waiting_sessions) {
-        if (auto ptr = weak_session.lock()) {
-            m_sessions[path] = ptr;
-            sessions_to_revive.emplace_back(std::move(ptr));
-        }
-    }
-    m_waiting_sessions.clear();
-    return sessions_to_revive;
-}
-
-void SyncUser::update_access_token(std::string&& token)
-{
-    {
-        util::CheckedLockGuard lock(m_mutex);
-        if (m_state != State::LoggedIn)
-            return;
-
-        util::CheckedLockGuard lock2(m_tokens_mutex);
-        m_access_token = RealmJWT(std::move(token));
-        m_sync_manager->perform_metadata_update([&, raw_access_token = m_access_token.token](const auto& manager) {
-            auto metadata = manager.get_or_make_user_metadata(m_identity);
-            metadata->set_access_token(raw_access_token);
-        });
-    }
-
-    emit_change_to_subscribers(*this);
-}
-
-std::vector<SyncUserIdentity> SyncUser::identities() const
+std::string SyncUser::app_id() const
 {
     util::CheckedLockGuard lock(m_mutex);
-    return m_user_identities;
-}
-
-void SyncUser::log_out()
-{
-    // We'll extend the lifetime of SyncManager while holding m_mutex so that we know it's safe to call methods on it
-    // after we've been marked as logged out.
-    std::shared_ptr<SyncManager> sync_manager_shared;
-    {
-        util::CheckedLockGuard lock(m_mutex);
-        bool is_anonymous = false;
-        {
-            util::CheckedLockGuard lock2(m_tokens_mutex);
-            if (m_state != State::LoggedIn) {
-                return;
-            }
-            is_anonymous = do_is_anonymous();
-            m_state = State::LoggedOut;
-            m_access_token = RealmJWT{};
-            m_refresh_token = RealmJWT{};
-        }
-
-        if (is_anonymous) {
-            // An Anonymous user can not log back in.
-            // Mark the user as 'dead' in the persisted metadata Realm.
-            m_state = State::Removed;
-            m_sync_manager->perform_metadata_update([&](const auto& manager) {
-                auto metadata = manager.get_or_make_user_metadata(m_identity, false);
-                if (metadata)
-                    metadata->remove();
-            });
-        }
-        else {
-            m_sync_manager->perform_metadata_update([&](const auto& manager) {
-                auto metadata = manager.get_or_make_user_metadata(m_identity);
-                metadata->set_state_and_tokens(State::LoggedOut, "", "");
-            });
-        }
-        sync_manager_shared = m_sync_manager->shared_from_this();
-        // Move all active sessions into the waiting sessions pool. If the user is
-        // logged back in, they will automatically be reactivated.
-        for (auto& [path, weak_session] : m_sessions) {
-            if (auto ptr = weak_session.lock()) {
-                ptr->force_close();
-                m_waiting_sessions[path] = std::move(ptr);
-            }
-        }
-        m_sessions.clear();
-    }
-
-    sync_manager_shared->log_out_user(*this);
-    emit_change_to_subscribers(*this);
-}
-
-bool SyncUser::is_logged_in() const
-{
-    util::CheckedLockGuard lock(m_mutex);
-    return m_state == State::LoggedIn;
-}
-
-bool SyncUser::is_anonymous() const
-{
-    util::CheckedLockGuard lock(m_mutex);
-    util::CheckedLockGuard lock2(m_tokens_mutex);
-    return do_is_anonymous();
-}
-
-bool SyncUser::do_is_anonymous() const
-{
-    return m_state == State::LoggedIn && m_user_identities.size() == 1 &&
-           m_user_identities[0].provider_type == app::IdentityProviderAnonymous;
+    return m_data.app_id;
 }
 
 std::string SyncUser::refresh_token() const
 {
-    util::CheckedLockGuard lock(m_tokens_mutex);
-    return m_refresh_token.token;
+    util::CheckedLockGuard lock(m_mutex);
+    return m_data.refresh_token.token;
 }
 
 std::string SyncUser::access_token() const
 {
-    util::CheckedLockGuard lock(m_tokens_mutex);
-    return m_access_token.token;
+    util::CheckedLockGuard lock(m_mutex);
+    return m_data.access_token.token;
 }
 
-std::string SyncUser::device_id() const
+UserData::State SyncUser::state() const
 {
     util::CheckedLockGuard lock(m_mutex);
-    return m_device_id;
+    return m_data.state;
 }
 
-bool SyncUser::has_device_id() const
+bool SyncUser::is_logged_in() const
 {
-    util::CheckedLockGuard lock(m_mutex);
-    return !m_device_id.empty() && m_device_id != "000000000000000000000000";
-}
-
-SyncUser::State SyncUser::state() const
-{
-    util::CheckedLockGuard lock(m_mutex);
-    return m_state;
-}
-
-SyncUserProfile SyncUser::user_profile() const
-{
-    util::CheckedLockGuard lock(m_mutex);
-    return m_user_profile;
-}
-
-util::Optional<bson::BsonDocument> SyncUser::custom_data() const
-{
-    util::CheckedLockGuard lock(m_tokens_mutex);
-    return m_access_token.user_data;
-}
-
-void SyncUser::update_user_profile(std::vector<SyncUserIdentity> identities, SyncUserProfile profile)
-{
-    util::CheckedLockGuard lock(m_mutex);
-    if (m_state == SyncUser::State::Removed) {
-        return;
-    }
-
-    m_user_identities = std::move(identities);
-    m_user_profile = std::move(profile);
-
-    m_sync_manager->perform_metadata_update([&](const auto& manager) NO_THREAD_SAFETY_ANALYSIS {
-        auto metadata = manager.get_or_make_user_metadata(m_identity);
-        metadata->set_identities(m_user_identities);
-        metadata->set_user_profile(m_user_profile);
-    });
+    return state() == UserData::State::LoggedIn;
 }
 
 void SyncUser::register_session(std::shared_ptr<SyncSession> session)
 {
     const std::string& path = session->path();
     util::CheckedUniqueLock lock(m_mutex);
-    switch (m_state) {
-        case State::LoggedIn:
+    switch (m_data.state) {
+        case UserData::State::LoggedIn:
             m_sessions[path] = session;
             break;
-        case State::LoggedOut:
-            m_waiting_sessions[path] = session;
+        case UserData::State::LoggedOut:
+            m_sessions[path] = session;
             break;
-        case State::Removed:
+        case UserData::State::Removed:
             break;
     }
-}
-
-app::MongoClient SyncUser::mongo_client(const std::string& service_name)
-{
-    util::CheckedLockGuard lk(m_mutex);
-    REALM_ASSERT(m_state == SyncUser::State::LoggedIn);
-    return app::MongoClient(shared_from_this(), m_sync_manager->app().lock(), service_name);
 }
 
 void SyncUser::set_binding_context_factory(SyncUserContextFactory factory)
@@ -437,64 +215,29 @@ void SyncUser::set_binding_context_factory(SyncUserContextFactory factory)
     s_binding_context_factory = std::move(factory);
 }
 
-void SyncUser::refresh_custom_data(util::UniqueFunction<void(util::Optional<app::AppError>)> completion_block)
-    REQUIRES(!m_mutex)
-{
-    refresh_custom_data(false, std::move(completion_block));
-}
-
-void SyncUser::refresh_custom_data(bool update_location,
-                                   util::UniqueFunction<void(util::Optional<app::AppError>)> completion_block)
-{
-    std::shared_ptr<app::App> app;
-    std::shared_ptr<SyncUser> user;
-    {
-        util::CheckedLockGuard lk(m_mutex);
-        if (m_state != SyncUser::State::Removed) {
-            user = shared_from_this();
-        }
-        if (m_sync_manager) {
-            app = m_sync_manager->app().lock();
-        }
-    }
-    if (!user) {
-        completion_block(app::AppError(
-            ErrorCodes::ClientUserNotFound,
-            util::format("Cannot initiate a refresh on user '%1' because the user has been removed", m_identity)));
-    }
-    else if (!app) {
-        completion_block(app::AppError(
-            ErrorCodes::ClientAppDeallocated,
-            util::format("Cannot initiate a refresh on user '%1' because the app has been deallocated", m_identity)));
-    }
-    else {
-        std::weak_ptr<SyncUser> weak_user = user->weak_from_this();
-        app->refresh_custom_data(user, update_location,
-                                 [completion_block = std::move(completion_block), weak_user](auto error) {
-                                     if (auto strong = weak_user.lock()) {
-                                         strong->emit_change_to_subscribers(*strong);
-                                     }
-                                     completion_block(error);
-                                 });
-    }
-}
-
 bool SyncUser::access_token_refresh_required() const
 {
     using namespace std::chrono;
     constexpr size_t buffer_seconds = 5; // arbitrary
-    util::CheckedLockGuard lock(m_tokens_mutex);
+    util::CheckedLockGuard lock(m_mutex);
     const auto now = duration_cast<seconds>(system_clock::now().time_since_epoch()).count() +
                      m_seconds_to_adjust_time_for_testing.load(std::memory_order_relaxed);
     const auto threshold = now - buffer_seconds;
-    return !m_access_token.token.empty() && m_access_token.expires_at < static_cast<int64_t>(threshold);
+    return !m_data.access_token.token.empty() && m_data.access_token.expires_at < static_cast<int64_t>(threshold);
+}
+
+void SyncUser::request_access_token_refresh() const
+{
+    if (m_provider) {
+        m_provider->request_access_token_refresh(m_user_id);
+    }
+}
+
+void SyncUser::request_action(sync::ProtocolErrorInfo::Action action) const
+{
+    if (m_provider) {
+        m_provider->server_requests_action(m_user_id, action);
+    }
 }
 
 } // namespace realm
-
-namespace std {
-size_t hash<realm::SyncUserIdentity>::operator()(const realm::SyncUserIdentity& k) const
-{
-    return ((hash<string>()(k.id) ^ (hash<string>()(k.provider_type) << 1)) >> 1);
-}
-} // namespace std
