@@ -291,7 +291,7 @@ AppSession get_runtime_app_session();
 std::string get_mongodb_server();
 
 template <typename Factory>
-inline app::App::Config get_config(Factory factory, const AppSession& app_session)
+inline app::AppConfig get_config(Factory factory, const AppSession& app_session)
 {
     return {app_session.client_app_id,
             factory,

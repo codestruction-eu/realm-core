@@ -167,7 +167,7 @@ void sort_events(std::vector<AuditEvent>& events)
 }
 
 #if REALM_ENABLE_AUTH_TESTS
-static std::vector<AuditEvent> get_audit_events_from_baas(TestAppSession& session, SyncUser& user,
+static std::vector<AuditEvent> get_audit_events_from_baas(TestAppSession& session, app::User& user,
                                                           size_t expected_count)
 {
     static const std::set<std::string> nonmetadata_fields = {"activity", "event", "data", "realm_id"};
@@ -300,6 +300,7 @@ TEST_CASE("audit object serialization", "[sync][pbs][audit]") {
         {"target", {{"_id", PropertyType::Int, Property::IsPrimary{true}}, {"value", PropertyType::Int}}},
         {"embedded target", ObjectSchema::ObjectType::Embedded, {{"value", PropertyType::Int}}}};
     config.audit_config = std::make_shared<AuditConfig>();
+    config.audit_config->base_file_path = test_session.base_file_path();
     auto serializer = std::make_shared<CustomSerializer>();
     config.audit_config->serializer = serializer;
     config.audit_config->logger = audit_logger;
@@ -1073,6 +1074,7 @@ TEST_CASE("audit management", "[sync][pbs][audit]") {
         {"object", {{"_id", PropertyType::Int, Property::IsPrimary{true}}, {"value", PropertyType::Int}}},
     };
     config.audit_config = std::make_shared<AuditConfig>();
+    config.audit_config->base_file_path = test_session.base_file_path();
     auto realm = Realm::get_shared_realm(config);
     auto audit = realm->audit_context();
     REQUIRE(audit);
@@ -1502,6 +1504,7 @@ TEST_CASE("audit realm sharding", "[sync][pbs][audit]") {
         {"object", {{"_id", PropertyType::Int, Property::IsPrimary{true}}, {"value", PropertyType::Int}}},
     };
     config.audit_config = std::make_shared<AuditConfig>();
+    config.audit_config->base_file_path = test_session.base_file_path();
     config.audit_config->logger = audit_logger;
     auto realm = Realm::get_shared_realm(config);
     auto audit = realm->audit_context();
@@ -1536,7 +1539,7 @@ TEST_CASE("audit realm sharding", "[sync][pbs][audit]") {
 
     // There should now be several unuploaded Realms in the local client
     // directory
-    auto root = test_session.base_file_path() + "/realm-audit/app_id/test/audit";
+    auto root = test_session.base_file_path() + "/realm-audit/app id/test/audit";
     std::string file_name;
     util::DirScanner dir(root);
     size_t file_count = 0;
@@ -1607,6 +1610,7 @@ TEST_CASE("audit realm sharding", "[sync][pbs][audit]") {
         SyncTestFile config(test_session, "other");
         config.audit_config = std::make_shared<AuditConfig>();
         config.audit_config->logger = audit_logger;
+        config.audit_config->base_file_path = test_session.base_file_path();
         auto realm = Realm::get_shared_realm(config);
         auto audit2 = realm->audit_context();
         REQUIRE(audit2);
@@ -1633,6 +1637,7 @@ TEST_CASE("audit realm sharding", "[sync][pbs][audit]") {
         // Open the same Realm with a different audit prefix
         SyncTestFile config(test_session, "parent");
         config.audit_config = std::make_shared<AuditConfig>();
+        config.audit_config->base_file_path = test_session.base_file_path();
         config.audit_config->logger = audit_logger;
         config.audit_config->partition_value_prefix = "other";
         auto realm = Realm::get_shared_realm(config);
@@ -1692,6 +1697,7 @@ TEST_CASE("audit integration tests", "[sync][pbs][audit][baas]") {
     config.schema = schema;
     config.audit_config = std::make_shared<AuditConfig>();
     config.audit_config->logger = audit_logger;
+    config.audit_config->base_file_path = session.app()->config().base_file_path;
 
     auto expect_error = [&](auto&& config, auto&& fn) -> SyncError {
         std::mutex mutex;
@@ -1750,6 +1756,7 @@ TEST_CASE("audit integration tests", "[sync][pbs][audit][baas]") {
         SyncTestFile config(session_2.app()->current_user(), bson::Bson("default"));
         config.schema = no_audit_event_schema;
         config.audit_config = std::make_shared<AuditConfig>();
+        config.audit_config->base_file_path = session.app()->config().base_file_path;
         config.audit_config->audit_user = audit_user;
 
         auto realm = Realm::get_shared_realm(config);
@@ -1787,7 +1794,7 @@ TEST_CASE("audit integration tests", "[sync][pbs][audit][baas]") {
         auto audit_user = session.app()->current_user();
         config.audit_config->audit_user = audit_user;
         auto realm = Realm::get_shared_realm(config);
-        session.sync_manager()->remove_user(audit_user->identity());
+        session.app()->remove_user(audit_user, nullptr);
 
         auto audit = realm->audit_context();
         auto scope = audit->begin_scope("scope");
@@ -1809,6 +1816,7 @@ TEST_CASE("audit integration tests", "[sync][pbs][audit][baas]") {
         SyncTestFile config(session_2.app()->current_user(), bson::Bson("default"));
         config.schema = no_audit_event_schema;
         config.audit_config = std::make_shared<AuditConfig>();
+        config.audit_config->base_file_path = session.app()->config().base_file_path;
 
         auto error = expect_error(config, generate_event);
         REQUIRE_THAT(error.status.reason(), StartsWith("Invalid schema change"));

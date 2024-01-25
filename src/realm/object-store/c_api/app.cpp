@@ -86,7 +86,7 @@ static inline auto make_callback(realm_app_user_completion_func_t callback, real
                                  realm_free_userdata_func_t userdata_free)
 {
     return [callback, userdata = SharedUserdata(userdata, FreeUserdata(userdata_free))](
-               std::shared_ptr<SyncUser> user, util::Optional<AppError> error) {
+               std::shared_ptr<app::User> user, util::Optional<AppError> error) {
         if (error) {
             realm_app_error_t c_err{to_capi(*error)};
             callback(userdata.get(), nullptr, &c_err);
@@ -238,6 +238,22 @@ RLM_API void realm_app_config_set_bundle_id(realm_app_config_t* config, const ch
     config->device_info.bundle_id = std::string(bundle_id);
 }
 
+RLM_API void realm_app_config_set_base_file_path(realm_app_config_t* config, const char* path) noexcept
+{
+    config->base_file_path = path;
+}
+
+RLM_API void realm_app_config_set_metadata_mode(realm_app_config_t* config,
+                                                realm_sync_client_metadata_mode_e mode) noexcept
+{
+    config->metadata_mode = app::AppConfig::MetadataMode(mode);
+}
+
+RLM_API void realm_app_config_set_metadata_encryption_key(realm_app_config_t* config, const uint8_t key[64]) noexcept
+{
+    config->custom_encryption_key = std::vector<char>(key, key + 64);
+}
+
 RLM_API const char* realm_app_credentials_serialize_as_json(realm_app_credentials_t* app_credentials) noexcept
 {
     return wrap_err([&] {
@@ -245,19 +261,17 @@ RLM_API const char* realm_app_credentials_serialize_as_json(realm_app_credential
     });
 }
 
-RLM_API realm_app_t* realm_app_create(const realm_app_config_t* app_config,
-                                      const realm_sync_client_config_t* sync_client_config)
+RLM_API realm_app_t* realm_app_create(const realm_app_config_t* app_config)
 {
     return wrap_err([&] {
-        return new realm_app_t(App::get_app(app::App::CacheMode::Disabled, *app_config, *sync_client_config));
+        return new realm_app_t(App::get_app(app::App::CacheMode::Disabled, *app_config));
     });
 }
 
-RLM_API realm_app_t* realm_app_create_cached(const realm_app_config_t* app_config,
-                                             const realm_sync_client_config_t* sync_client_config)
+RLM_API realm_app_t* realm_app_create_cached(const realm_app_config_t* app_config)
 {
     return wrap_err([&] {
-        return new realm_app_t(App::get_app(app::App::CacheMode::Enabled, *app_config, *sync_client_config));
+        return new realm_app_t(App::get_app(app::App::CacheMode::Enabled, *app_config));
     });
 }
 
@@ -377,13 +391,10 @@ RLM_API bool realm_app_link_user(realm_app_t* app, realm_user_t* user, realm_app
     });
 }
 
-RLM_API bool realm_app_switch_user(realm_app_t* app, realm_user_t* user, realm_user_t** new_user)
+RLM_API bool realm_app_switch_user(realm_app_t* app, realm_user_t* user)
 {
     return wrap_err([&] {
-        auto new_user_local = (*app)->switch_user(*user);
-        if (new_user) {
-            *new_user = new realm_user_t(std::move(new_user_local));
-        }
+        (*app)->switch_user(*user);
         return true;
     });
 }
@@ -649,17 +660,21 @@ RLM_API void realm_app_sync_client_wait_for_sessions_to_terminate(realm_app_t* a
 RLM_API char* realm_app_sync_client_get_default_file_path_for_realm(const realm_sync_config_t* config,
                                                                     const char* custom_filename)
 {
-    return wrap_err([&]() {
+    return wrap_err([&]() -> char* {
+        auto user = std::dynamic_pointer_cast<app::User>(config->user);
+        if (!user) {
+            return nullptr;
+        }
         util::Optional<std::string> filename =
             custom_filename ? util::some<std::string>(custom_filename) : util::none;
-        std::string file_path = config->user->sync_manager()->path_for_realm(*config, std::move(filename));
+        std::string file_path = user->app()->path_for_realm(*config, std::move(filename));
         return duplicate_string(file_path);
     });
 }
 
-RLM_API const char* realm_user_get_identity(const realm_user_t* user) noexcept
+RLM_API char* realm_user_get_identity(const realm_user_t* user) noexcept
 {
-    return (*user)->identity().c_str();
+    return duplicate_string((*user)->user_id());
 }
 
 RLM_API realm_user_state_e realm_user_get_state(const realm_user_t* user) noexcept
@@ -740,18 +755,11 @@ RLM_API char* realm_user_get_refresh_token(const realm_user_t* user)
 RLM_API realm_app_t* realm_user_get_app(const realm_user_t* user) noexcept
 {
     REALM_ASSERT(user);
-    try {
-        if (auto shared_app = (*user)->sync_manager()->app().lock()) {
-            return new realm_app_t(shared_app);
-        }
-    }
-    catch (const std::exception&) {
-    }
-    return nullptr;
+    return new realm_app_t((*user)->app());
 }
 
 
-RLM_API realm_sync_user_subscription_token_t*
+RLM_API realm_app_user_subscription_token_t*
 realm_sync_user_on_state_change_register_callback(realm_user_t* user, realm_sync_on_user_state_changed_t callback,
                                                   realm_userdata_t userdata, realm_free_userdata_func_t userdata_free)
 {
@@ -761,7 +769,7 @@ realm_sync_user_on_state_change_register_callback(realm_user_t* user, realm_sync
             callback(userdata.get(), realm_user_state_e(sync_user.state()));
         };
         auto token = (*user)->subscribe(std::move(cb));
-        return new realm_sync_user_subscription_token_t{*user, std::move(token)};
+        return new realm_app_user_subscription_token_t{*user, std::move(token)};
     });
 }
 
