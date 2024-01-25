@@ -37,6 +37,7 @@
 #include <numeric>
 #include <thread>
 #include <fstream>
+#include <iostream>
 
 #if REALM_ENABLE_SYNC
 #include "util/sync/flx_sync_harness.hpp"
@@ -951,6 +952,7 @@ struct LogUserData {
 void realm_log_func(realm_userdata_t u, realm_log_level_e, const char* message)
 {
     LogUserData* userdata = static_cast<LogUserData*>(u);
+    std::cout << message << std::endl;
     userdata->log.emplace_back(message);
 }
 
@@ -1546,6 +1548,7 @@ TEST_CASE("C API logging", "[c_api]") {
     auto log_level_old = util::LogCategory::realm.get_default_level_threshold();
     realm_set_log_callback(realm_log_func, RLM_LOG_LEVEL_DEBUG, &userdata, nullptr);
     realm_set_log_level_category("Realm.Storage.Object", RLM_LOG_LEVEL_OFF);
+
     auto config = make_config(test_file.path.c_str(), true);
     realm_t* realm = realm_open(config.get());
     realm_begin_write(realm);
@@ -1557,17 +1560,25 @@ TEST_CASE("C API logging", "[c_api]") {
     realm_set_value(obj1.get(), info.key, rlm_int_val(123), false);
     realm_commit(realm);
     CHECK(userdata.log.size() == 11);
+
+    std::cout << "jed 1" << std::endl;
+
     realm_set_log_level(RLM_LOG_LEVEL_INFO);
     // Commit begin/end should not be logged at INFO level
     realm_begin_write(realm);
     realm_commit(realm);
     CHECK(userdata.log.size() == 11);
     realm_release(realm);
+
+    std::cout << "jed 2" << std::endl;
+
     userdata.log.clear();
     realm_set_log_level(RLM_LOG_LEVEL_ERROR);
     realm = realm_open(config.get());
     realm_release(realm);
     CHECK(userdata.log.empty());
+
+    std::cout << "jed 3" << std::endl;
 
     // Remove this logger again
     realm_set_log_callback(nullptr, RLM_LOG_LEVEL_DEBUG, nullptr, nullptr);
