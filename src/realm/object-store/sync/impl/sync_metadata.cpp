@@ -35,6 +35,7 @@
 #include <realm/table.hpp>
 
 using namespace realm;
+using namespace realm::app;
 
 namespace {
 static const char* const c_sync_userMetadata = "UserMetadata";

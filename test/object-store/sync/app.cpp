@@ -3522,7 +3522,7 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
             auto user = app->current_user();
             REQUIRE(user);
             REQUIRE(app_session.admin_api.verify_access_token(user->access_token(), app_session.server_app_id));
-            app_session.admin_api.disable_user_sessions(app->current_user()->identity(), app_session.server_app_id);
+            app_session.admin_api.disable_user_sessions(app->current_user()->user_id(), app_session.server_app_id);
 
             verify_error_on_sync_with_invalid_refresh_token(user, config);
 
@@ -3531,7 +3531,7 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
             REQUIRE(error.code() == ErrorCodes::UserDisabled);
 
             // admin enables user sessions again which should allow the session to continue
-            app_session.admin_api.enable_user_sessions(user->identity(), app_session.server_app_id);
+            app_session.admin_api.enable_user_sessions(user->user_id(), app_session.server_app_id);
 
             // logging in now works properly
             log_in(app, creds);
@@ -3552,7 +3552,7 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
             SyncTestFile config(app, partition, schema);
             auto user = app->current_user();
             REQUIRE(app_session.admin_api.verify_access_token(user->access_token(), app_session.server_app_id));
-            app_session.admin_api.revoke_user_sessions(user->identity(), app_session.server_app_id);
+            app_session.admin_api.revoke_user_sessions(user->user_id(), app_session.server_app_id);
             // revoking a user session only affects the refresh token, so the access token should still continue to
             // work.
             REQUIRE(app_session.admin_api.verify_access_token(user->access_token(), app_session.server_app_id));
@@ -3585,7 +3585,7 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
             REQUIRE(app->current_user() == anon_user);
             SyncTestFile config(app, partition, schema);
             REQUIRE(app_session.admin_api.verify_access_token(anon_user->access_token(), app_session.server_app_id));
-            app_session.admin_api.revoke_user_sessions(anon_user->identity(), app_session.server_app_id);
+            app_session.admin_api.revoke_user_sessions(anon_user->user_id(), app_session.server_app_id);
             // revoking a user session only affects the refresh token, so the access token should still continue to
             // work.
             REQUIRE(app_session.admin_api.verify_access_token(anon_user->access_token(), app_session.server_app_id));
@@ -3602,19 +3602,19 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
                 REQUIRE(error);
                 REQUIRE(error->reason() ==
                         util::format("Cannot initiate a refresh on user '%1' because the user has been removed",
-                                     anon_user->identity()));
+                                     anon_user->user_id()));
             });
 
             REQUIRE_EXCEPTION(
                 Realm::get_shared_realm(config), ClientUserNotFound,
                 util::format("Cannot start a sync session for user '%1' because this user has been removed.",
-                             anon_user->identity()));
+                             anon_user->user_id()));
         }
 
         SECTION("Opening a Realm with a removed email user results produces an exception") {
             auto creds = create_user_and_log_in(app);
             auto email_user = app->current_user();
-            const std::string user_ident = email_user->identity();
+            const std::string user_ident = email_user->user_id();
             REQUIRE(email_user);
             SyncTestFile config(app, partition, schema);
             REQUIRE(email_user->is_logged_in());
@@ -3640,7 +3640,7 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
             // but the new instance will work and has the same server issued ident
             REQUIRE(new_user_instance);
             REQUIRE(new_user_instance->is_logged_in());
-            REQUIRE(new_user_instance->identity() == user_ident);
+            REQUIRE(new_user_instance->user_id() == user_ident);
             {
                 // sync works again if the same user is logged back in
                 config.sync_config->user = new_user_instance;
@@ -4896,28 +4896,28 @@ TEST_CASE("app: user_semantics", "[sync][app][user]") {
 
     SECTION("current user is populated") {
         const auto user1 = login_user_anonymous();
-        CHECK(app->current_user()->identity() == user1->identity());
+        CHECK(app->current_user()->user_id() == user1->user_id());
         CHECK(event_processed == 1);
     }
 
     SECTION("current user is updated on login") {
         const auto user1 = login_user_anonymous();
-        CHECK(app->current_user()->identity() == user1->identity());
+        CHECK(app->current_user()->user_id() == user1->user_id());
         const auto user2 = login_user_email_pass();
-        CHECK(app->current_user()->identity() == user2->identity());
-        CHECK(user1->identity() != user2->identity());
+        CHECK(app->current_user()->user_id() == user2->user_id());
+        CHECK(user1->user_id() != user2->user_id());
         CHECK(event_processed == 2);
     }
 
     SECTION("current user is updated to last used user on logout") {
         const auto user1 = login_user_anonymous();
-        CHECK(app->current_user()->identity() == user1->identity());
+        CHECK(app->current_user()->user_id() == user1->user_id());
         CHECK(app->all_users()[0]->state() == SyncUser::State::LoggedIn);
 
         const auto user2 = login_user_email_pass();
         CHECK(app->all_users()[0]->state() == SyncUser::State::LoggedIn);
         CHECK(app->all_users()[1]->state() == SyncUser::State::LoggedIn);
-        CHECK(app->current_user()->identity() == user2->identity());
+        CHECK(app->current_user()->user_id() == user2->user_id());
         CHECK(user1 != user2);
 
         // should reuse existing session
@@ -4932,7 +4932,7 @@ TEST_CASE("app: user_semantics", "[sync][app][user]") {
         app->log_out([](auto) {});
         CHECK(user_events_processed == 1);
 
-        CHECK(app->current_user()->identity() == user2->identity());
+        CHECK(app->current_user()->user_id() == user2->user_id());
 
         CHECK(app->all_users().size() == 1);
         CHECK(app->all_users()[0]->state() == SyncUser::State::LoggedIn);
@@ -4942,14 +4942,14 @@ TEST_CASE("app: user_semantics", "[sync][app][user]") {
 
     SECTION("anon users are removed on logout") {
         const auto user1 = login_user_anonymous();
-        CHECK(app->current_user()->identity() == user1->identity());
+        CHECK(app->current_user()->user_id() == user1->user_id());
         CHECK(app->all_users()[0]->state() == SyncUser::State::LoggedIn);
 
         const auto user2 = login_user_anonymous();
         CHECK(app->all_users()[0]->state() == SyncUser::State::LoggedIn);
         CHECK(app->all_users().size() == 1);
-        CHECK(app->current_user()->identity() == user2->identity());
-        CHECK(user1->identity() == user2->identity());
+        CHECK(app->current_user()->user_id() == user2->user_id());
+        CHECK(user1->user_id() == user2->user_id());
 
         app->log_out([](auto) {});
         CHECK(app->all_users().size() == 0);
@@ -4991,14 +4991,14 @@ TEST_CASE("app: user_semantics", "[sync][app][user]") {
         app->unsubscribe(token);
 
         const auto user1 = login_user_anonymous();
-        CHECK(app->current_user()->identity() == user1->identity());
+        CHECK(app->current_user()->user_id() == user1->user_id());
         CHECK(app->all_users()[0]->state() == SyncUser::State::LoggedIn);
 
         const auto user2 = login_user_anonymous();
         CHECK(app->all_users()[0]->state() == SyncUser::State::LoggedIn);
         CHECK(app->all_users().size() == 1);
-        CHECK(app->current_user()->identity() == user2->identity());
-        CHECK(user1->identity() == user2->identity());
+        CHECK(app->current_user()->user_id() == user2->user_id());
+        CHECK(user1->user_id() == user2->user_id());
 
         app->log_out([](auto) {});
         CHECK(app->all_users().size() == 0);
@@ -5264,7 +5264,7 @@ TEST_CASE("app: link_user", "[sync][app][user]") {
         app->link_user(sync_user, custom_credentials, [&](std::shared_ptr<SyncUser> user, Optional<AppError> error) {
             REQUIRE_FALSE(error);
             REQUIRE(user);
-            CHECK(user->identity() == sync_user->identity());
+            CHECK(user->user_id() == sync_user->user_id());
             processed = true;
         });
         CHECK(processed);

@@ -86,7 +86,7 @@ static inline auto make_callback(realm_app_user_completion_func_t callback, real
                                  realm_free_userdata_func_t userdata_free)
 {
     return [callback, userdata = SharedUserdata(userdata, FreeUserdata(userdata_free))](
-               std::shared_ptr<SyncUser> user, util::Optional<AppError> error) {
+               std::shared_ptr<AppUser> user, util::Optional<AppError> error) {
         if (error) {
             realm_app_error_t c_err{to_capi(*error)};
             callback(userdata.get(), nullptr, &c_err);

@@ -21,14 +21,14 @@
 
 #include <realm/object-store/results.hpp>
 #include <realm/object-store/shared_realm.hpp>
-#include <realm/object-store/sync/sync_user.hpp>
+#include <realm/object-store/sync/app_user.hpp>
 
 #include <realm/obj.hpp>
 #include <realm/table.hpp>
 #include <realm/util/optional.hpp>
 #include <string>
 
-namespace realm {
+namespace realm::app {
 class SyncMetadataManager;
 
 // A facade for a metadata Realm object representing app metadata
@@ -81,7 +81,7 @@ public:
     // for testing purposes only
     void set_legacy_identities(const std::vector<std::string>&);
 
-    std::vector<realm::SyncUserIdentity> identities() const;
+    std::vector<realm::app::SyncUserIdentity> identities() const;
     void set_identities(std::vector<SyncUserIdentity>);
 
     void set_state_and_tokens(SyncUser::State state, std::string_view access_token, std::string_view refresh_token);
@@ -95,13 +95,13 @@ public:
     std::string device_id() const;
     void set_device_id(std::string_view);
 
-    SyncUserProfile profile() const;
-    void set_user_profile(const SyncUserProfile&);
+    app::SyncUserProfile profile() const;
+    void set_user_profile(const app::SyncUserProfile&);
 
     std::vector<std::string> realm_file_paths() const;
     void add_realm_file_path(std::string_view path);
 
-    void set_state(SyncUser::State);
+    void set_state(UserData::State);
 
     SyncUser::State state() const;
 
@@ -266,6 +266,6 @@ private:
     util::Optional<SyncAppMetadata> m_app_metadata;
 };
 
-} // namespace realm
+} // namespace realm::app
 
 #endif // REALM_OS_SYNC_METADATA_HPP

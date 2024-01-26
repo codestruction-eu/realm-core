@@ -61,6 +61,8 @@ struct AuditConfig {
     // in the server-side schema for AuditEvent. This is not validated and will
     // result in a sync error if violated.
     std::vector<std::pair<std::string, std::string>> metadata;
+    // Root directory to store audit Realms. See RealmBackingStoreConfig::base_file_path.
+    std::string_view base_file_path;
 };
 
 class AuditInterface {

@@ -237,6 +237,7 @@ static std::string validate_and_clean_path(const std::string& path)
 
 } // namespace util
 
+namespace app {
 SyncFileManager::SyncFileManager(const std::string& base_path, const std::string& app_id)
     : m_base_path(util::file_path_by_appending_component(base_path, c_sync_directory, util::FilePathType::Directory))
     , m_app_path(util::file_path_by_appending_component(m_base_path, util::validate_and_clean_path(app_id),
@@ -332,7 +333,7 @@ static bool try_file_remove(const std::string& path) noexcept
     }
 }
 
-util::Optional<std::string>
+std::optional<std::string>
 SyncFileManager::get_existing_realm_file_path(const std::string& user_identity,
                                               const std::vector<std::string>& legacy_user_identities,
                                               const std::string& realm_file_name, const std::string& partition) const
@@ -515,4 +516,5 @@ std::string SyncFileManager::get_user_directory_path(const std::string& user_ide
                                             util::FilePathType::Directory);
 }
 
+} // namespace app
 } // namespace realm

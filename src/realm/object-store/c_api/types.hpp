@@ -679,9 +679,9 @@ struct realm_app_credentials : realm::c_api::WrapC, realm::app::AppCredentials {
     }
 };
 
-struct realm_user : realm::c_api::WrapC, std::shared_ptr<realm::SyncUser> {
-    realm_user(std::shared_ptr<realm::SyncUser> user)
-        : std::shared_ptr<realm::SyncUser>{std::move(user)}
+struct realm_user : realm::c_api::WrapC, std::shared_ptr<realm::app::AppUser> {
+    realm_user(std::shared_ptr<realm::app::AppUser> user)
+        : std::shared_ptr<realm::app::AppUser>{std::move(user)}
     {
     }
 

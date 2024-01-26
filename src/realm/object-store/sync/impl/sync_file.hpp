@@ -55,6 +55,7 @@ std::string reserve_unique_file_name(const std::string& path, const std::string&
 
 } // namespace util
 
+namespace app {
 // This class manages how Synced Realms are stored on the filesystem.
 class SyncFileManager {
 public:
@@ -68,10 +69,10 @@ public:
     /// this file.
     static bool try_file_exists(const std::string& path) noexcept;
 
-    util::Optional<std::string> get_existing_realm_file_path(const std::string& user_identity,
-                                                             const std::vector<std::string>& legacy_user_identities,
-                                                             const std::string& realm_file_name,
-                                                             const std::string& partition) const;
+    std::optional<std::string> get_existing_realm_file_path(const std::string& user_identity,
+                                                            const std::vector<std::string>& legacy_user_identities,
+                                                            const std::string& realm_file_name,
+                                                            const std::string& partition) const;
     /// Return the path for a given Realm, creating the user directory if it does not already exist.
     std::string realm_file_path(const std::string& user_identity,
                                 const std::vector<std::string>& legacy_user_identities,
@@ -104,7 +105,7 @@ public:
         return m_app_path;
     }
 
-    std::string recovery_directory_path(util::Optional<std::string> const& directory = none) const
+    std::string recovery_directory_path(std::optional<std::string> const& directory = none) const
     {
         return get_special_directory(directory.value_or(c_recovery_directory));
     }
@@ -147,6 +148,7 @@ private:
     std::string fallback_hashed_realm_file_path(const std::string& preferred_path) const;
 };
 
+} // namespace app
 } // namespace realm
 
 #endif // REALM_OS_SYNC_FILE_HPP

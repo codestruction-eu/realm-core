@@ -25,6 +25,7 @@
 #include <realm/util/platform_info.hpp>
 #include <realm/util/uri.hpp>
 #include <realm/object-store/sync/app_utils.hpp>
+#include <realm/object-store/sync/impl/sync_metadata.hpp>
 #include <realm/object-store/sync/sync_manager.hpp>
 #include <realm/object-store/sync/sync_user.hpp>
 #include <realm/object-store/sync/realm_backing_store.hpp>
@@ -143,7 +144,7 @@ enum class RequestTokenType { NoAuth, AccessToken, RefreshToken };
 
 // generate the request headers for a HTTP call, by default it will generate headers with a refresh token if a user is
 // passed
-HttpHeaders get_request_headers(const std::shared_ptr<SyncUser>& with_user_authorization = nullptr,
+HttpHeaders get_request_headers(const std::shared_ptr<AppUser>& with_user_authorization = nullptr,
                                 RequestTokenType token_type = RequestTokenType::RefreshToken)
 {
     HttpHeaders headers{{"Content-Type", "application/json;charset=utf-8"}, {"Accept", "application/json"}};
@@ -505,7 +506,7 @@ std::string App::UserAPIKeyProviderClient::url_for_path(const std::string& path 
 }
 
 void App::UserAPIKeyProviderClient::create_api_key(
-    const std::string& name, const std::shared_ptr<SyncUser>& user,
+    const std::string& name, const std::shared_ptr<AppUser>& user,
     UniqueFunction<void(UserAPIKey&&, Optional<AppError>)>&& completion)
 {
     Request req;
@@ -517,7 +518,7 @@ void App::UserAPIKeyProviderClient::create_api_key(
                                                    UserAPIKeyResponseHandler{std::move(completion)});
 }
 
-void App::UserAPIKeyProviderClient::fetch_api_key(const realm::ObjectId& id, const std::shared_ptr<SyncUser>& user,
+void App::UserAPIKeyProviderClient::fetch_api_key(const realm::ObjectId& id, const std::shared_ptr<AppUser>& user,
                                                   UniqueFunction<void(UserAPIKey&&, Optional<AppError>)>&& completion)
 {
     Request req;
@@ -529,7 +530,7 @@ void App::UserAPIKeyProviderClient::fetch_api_key(const realm::ObjectId& id, con
 }
 
 void App::UserAPIKeyProviderClient::fetch_api_keys(
-    const std::shared_ptr<SyncUser>& user,
+    const std::shared_ptr<AppUser>& user,
     UniqueFunction<void(std::vector<UserAPIKey>&&, Optional<AppError>)>&& completion)
 {
     Request req;
@@ -558,7 +559,7 @@ void App::UserAPIKeyProviderClient::fetch_api_keys(
         });
 }
 
-void App::UserAPIKeyProviderClient::delete_api_key(const realm::ObjectId& id, const std::shared_ptr<SyncUser>& user,
+void App::UserAPIKeyProviderClient::delete_api_key(const realm::ObjectId& id, const std::shared_ptr<AppUser>& user,
                                                    UniqueFunction<void(Optional<AppError>)>&& completion)
 {
     Request req;
@@ -569,7 +570,7 @@ void App::UserAPIKeyProviderClient::delete_api_key(const realm::ObjectId& id, co
                                                    handle_default_response(std::move(completion)));
 }
 
-void App::UserAPIKeyProviderClient::enable_api_key(const realm::ObjectId& id, const std::shared_ptr<SyncUser>& user,
+void App::UserAPIKeyProviderClient::enable_api_key(const realm::ObjectId& id, const std::shared_ptr<AppUser>& user,
                                                    UniqueFunction<void(Optional<AppError>)>&& completion)
 {
     Request req;
@@ -580,7 +581,7 @@ void App::UserAPIKeyProviderClient::enable_api_key(const realm::ObjectId& id, co
                                                    handle_default_response(std::move(completion)));
 }
 
-void App::UserAPIKeyProviderClient::disable_api_key(const realm::ObjectId& id, const std::shared_ptr<SyncUser>& user,
+void App::UserAPIKeyProviderClient::disable_api_key(const realm::ObjectId& id, const std::shared_ptr<AppUser>& user,
                                                     UniqueFunction<void(Optional<AppError>)>&& completion)
 {
     Request req;
@@ -592,12 +593,12 @@ void App::UserAPIKeyProviderClient::disable_api_key(const realm::ObjectId& id, c
 }
 // MARK: - App
 
-std::shared_ptr<SyncUser> App::current_user() const
+std::shared_ptr<AppUser> App::current_user() const
 {
     return m_app_backing_store->get_current_user();
 }
 
-std::vector<std::shared_ptr<SyncUser>> App::all_users() const
+std::vector<std::shared_ptr<AppUser>> App::all_users() const
 {
     return m_app_backing_store->all_users();
 }
@@ -644,8 +645,8 @@ void App::update_base_url(std::optional<std::string> base_url, UniqueFunction<vo
     request_location(std::move(completion), new_base_url);
 }
 
-void App::get_profile(const std::shared_ptr<SyncUser>& sync_user,
-                      UniqueFunction<void(const std::shared_ptr<SyncUser>&, Optional<AppError>)>&& completion)
+void App::get_profile(const std::shared_ptr<AppUser>& sync_user,
+                      UniqueFunction<void(const std::shared_ptr<AppUser>&, Optional<AppError>)>&& completion)
 {
     Request req;
     req.method = HttpMethod::get;
@@ -674,7 +675,7 @@ void App::get_profile(const std::shared_ptr<SyncUser>& sync_user,
 
                 sync_user->update_user_profile(std::move(identities),
                                                SyncUserProfile(get<BsonDocument>(profile_json, "data")));
-                self->m_app_backing_store->set_current_user(sync_user->identity());
+                self->m_app_backing_store->set_current_user(sync_user->user_id());
                 self->emit_change_to_subscribers(*self);
             }
             catch (const AppError& err) {
@@ -709,8 +710,8 @@ void App::attach_auth_options(BsonDocument& body)
 }
 
 void App::log_in_with_credentials(
-    const AppCredentials& credentials, const std::shared_ptr<SyncUser>& linking_user,
-    UniqueFunction<void(const std::shared_ptr<SyncUser>&, Optional<AppError>)>&& completion)
+    const AppCredentials& credentials, const std::shared_ptr<AppUser>& linking_user,
+    UniqueFunction<void(const std::shared_ptr<AppUser>&, Optional<AppError>)>&& completion)
 {
     if (would_log(util::Logger::Level::debug)) {
         auto app_info = util::format("app_id: %1", m_config.app_id);
@@ -745,17 +746,25 @@ void App::log_in_with_credentials(
                 return completion(nullptr, std::move(error));
             }
 
-            std::shared_ptr<realm::SyncUser> sync_user = linking_user;
+            std::shared_ptr<AppUser> sync_user = linking_user;
             try {
                 auto json = parse<BsonDocument>(response.body);
-                if (linking_user) {
-                    linking_user->update_access_token(get<std::string>(json, "access_token"));
+                std::string refresh_token = get<std::string>(json, "refresh_token");
+                std::string access_token = get<std::string>(json, "access_token");
+                if (!linking_user) {
+                    sync_user =
+                        self->m_app_backing_store->get_user(get<std::string>(json, "user_id"), refresh_token,
+                                                            access_token, get<std::string>(json, "device_id"));
                 }
-                else {
-                    sync_user = self->m_app_backing_store->get_user(
-                        get<std::string>(json, "user_id"), get<std::string>(json, "refresh_token"),
-                        get<std::string>(json, "access_token"), get<std::string>(json, "device_id"));
-                }
+                self->m_app_backing_store->perform_metadata_update([&](const auto& manager) {
+                    auto metadata = manager.get_or_make_user_metadata(sync_user->user_id());
+                    metadata->set_state_and_tokens(SyncUser::State::LoggedIn, access_token, refresh_token);
+                });
+                auto data = self->UserProvider::get_data(sync_user);
+                data.state = SyncUser::State::LoggedIn;
+                data.access_token = RealmJWT(access_token);
+                data.refresh_token = RealmJWT(refresh_token);
+                self->UserProvider::update(sync_user, data);
             }
             catch (const AppError& e) {
                 return completion(nullptr, e);
@@ -768,12 +777,12 @@ void App::log_in_with_credentials(
 
 void App::log_in_with_credentials(
     const AppCredentials& credentials,
-    util::UniqueFunction<void(const std::shared_ptr<SyncUser>&, Optional<AppError>)>&& completion)
+    util::UniqueFunction<void(const std::shared_ptr<AppUser>&, Optional<AppError>)>&& completion)
 {
     App::log_in_with_credentials(credentials, nullptr, std::move(completion));
 }
 
-void App::log_out(const std::shared_ptr<SyncUser>& user, UniqueFunction<void(Optional<AppError>)>&& completion)
+void App::log_out(const std::shared_ptr<AppUser>& user, UniqueFunction<void(Optional<AppError>)>&& completion)
 {
     if (!user || user->state() != SyncUser::State::LoggedIn) {
         log_debug("App: log_out() - already logged out");
@@ -782,7 +791,7 @@ void App::log_out(const std::shared_ptr<SyncUser>& user, UniqueFunction<void(Opt
 
     log_debug("App: log_out(%1)", user->user_profile().name());
     auto refresh_token = user->refresh_token();
-    user->log_out();
+    do_log_out(user);
 
     Request req;
     req.method = HttpMethod::del;
@@ -808,7 +817,7 @@ void App::log_out(UniqueFunction<void(Optional<AppError>)>&& completion)
     log_out(current_user(), std::move(completion));
 }
 
-bool App::verify_user_present(const std::shared_ptr<SyncUser>& user) const
+bool App::verify_user_present(const std::shared_ptr<AppUser>& user) const
 {
     auto users = all_users();
     return std::any_of(users.begin(), users.end(), [&](auto&& u) {
@@ -816,7 +825,7 @@ bool App::verify_user_present(const std::shared_ptr<SyncUser>& user) const
     });
 }
 
-std::shared_ptr<SyncUser> App::switch_user(const std::shared_ptr<SyncUser>& user) const
+std::shared_ptr<AppUser> App::switch_user(const std::shared_ptr<AppUser>& user) const
 {
     if (!user || user->state() != SyncUser::State::LoggedIn) {
         throw AppError(ErrorCodes::ClientUserNotLoggedIn, "User is no longer valid or is logged out");
@@ -825,12 +834,12 @@ std::shared_ptr<SyncUser> App::switch_user(const std::shared_ptr<SyncUser>& user
         throw AppError(ErrorCodes::ClientUserNotFound, "User does not exist");
     }
 
-    m_app_backing_store->set_current_user(user->identity());
+    m_app_backing_store->set_current_user(user->user_id());
     emit_change_to_subscribers(*this);
     return current_user();
 }
 
-void App::remove_user(const std::shared_ptr<SyncUser>& user, UniqueFunction<void(Optional<AppError>)>&& completion)
+void App::remove_user(const std::shared_ptr<AppUser>& user, UniqueFunction<void(Optional<AppError>)>&& completion)
 {
     if (!user || user->state() == SyncUser::State::Removed) {
         return completion(AppError(ErrorCodes::ClientUserNotFound, "User has already been removed"));
@@ -839,20 +848,25 @@ void App::remove_user(const std::shared_ptr<SyncUser>& user, UniqueFunction<void
         return completion(AppError(ErrorCodes::ClientUserNotFound, "No user has been found"));
     }
 
+    m_app_backing_store->remove_user(user->user_id());
+    UserData data = UserProvider::get_data(user);
+    data.state = SyncUser::State::Removed;
+    data.access_token = {};
+    data.refresh_token = {};
+    UserProvider::update(user, data);
+
     if (user->is_logged_in()) {
         log_out(user, [user, completion = std::move(completion),
                        self = shared_from_this()](const Optional<AppError>& error) {
-            self->m_app_backing_store->remove_user(user->identity());
             return completion(error);
         });
     }
     else {
-        m_app_backing_store->remove_user(user->identity());
         return completion({});
     }
 }
 
-void App::delete_user(const std::shared_ptr<SyncUser>& user, UniqueFunction<void(Optional<AppError>)>&& completion)
+void App::delete_user(const std::shared_ptr<AppUser>& user, UniqueFunction<void(Optional<AppError>)>&& completion)
 {
     if (!user) {
         return completion(AppError(ErrorCodes::ClientUserNotFound, "The specified user could not be found."));
@@ -871,7 +885,7 @@ void App::delete_user(const std::shared_ptr<SyncUser>& user, UniqueFunction<void
     req.url = url_for_path("/auth/delete");
     do_authenticated_request(std::move(req), user,
                              [self = shared_from_this(), completion = std::move(completion),
-                              identity = user->identity()](const Response& response) {
+                              identity = user->user_id()](const Response& response) {
                                  auto error = AppUtils::check_for_errors(response);
                                  if (!error) {
                                      self->emit_change_to_subscribers(*self);
@@ -881,8 +895,8 @@ void App::delete_user(const std::shared_ptr<SyncUser>& user, UniqueFunction<void
                              });
 }
 
-void App::link_user(const std::shared_ptr<SyncUser>& user, const AppCredentials& credentials,
-                    UniqueFunction<void(const std::shared_ptr<SyncUser>&, Optional<AppError>)>&& completion)
+void App::link_user(const std::shared_ptr<AppUser>& user, const AppCredentials& credentials,
+                    UniqueFunction<void(const std::shared_ptr<AppUser>&, Optional<AppError>)>&& completion)
 {
     if (!user) {
         return completion(nullptr,
@@ -899,13 +913,13 @@ void App::link_user(const std::shared_ptr<SyncUser>& user, const AppCredentials&
     App::log_in_with_credentials(credentials, user, std::move(completion));
 }
 
-void App::refresh_custom_data(const std::shared_ptr<SyncUser>& user,
+void App::refresh_custom_data(const std::shared_ptr<AppUser>& user,
                               UniqueFunction<void(Optional<AppError>)>&& completion)
 {
     refresh_access_token(user, false, std::move(completion));
 }
 
-void App::refresh_custom_data(const std::shared_ptr<SyncUser>& user, bool update_location,
+void App::refresh_custom_data(const std::shared_ptr<AppUser>& user, bool update_location,
                               UniqueFunction<void(Optional<AppError>)>&& completion)
 {
     refresh_access_token(user, update_location, std::move(completion));
@@ -1142,7 +1156,7 @@ void App::check_for_redirect_response(Request&& request, const Response& respons
     update_location_and_resend(std::move(request), std::move(completion), std::move(redir_location));
 }
 
-void App::do_authenticated_request(Request&& request, const std::shared_ptr<SyncUser>& sync_user,
+void App::do_authenticated_request(Request&& request, const std::shared_ptr<AppUser>& sync_user,
                                    util::UniqueFunction<void(const Response&)>&& completion)
 {
     request.headers = get_request_headers(sync_user, request.uses_refresh_token ? RequestTokenType::RefreshToken
@@ -1163,14 +1177,14 @@ void App::do_authenticated_request(Request&& request, const std::shared_ptr<Sync
 }
 
 void App::handle_auth_failure(const AppError& error, const Response& response, Request&& request,
-                              const std::shared_ptr<SyncUser>& sync_user,
+                              const std::shared_ptr<AppUser>& sync_user,
                               util::UniqueFunction<void(const Response&)>&& completion)
 {
     // Only handle auth failures
     if (*error.additional_status_code == 401) {
         if (request.uses_refresh_token) {
             if (sync_user && sync_user->is_logged_in()) {
-                sync_user->log_out();
+                do_log_out(sync_user);
             }
             completion(response);
             return;
@@ -1199,7 +1213,7 @@ void App::handle_auth_failure(const AppError& error, const Response& response, R
 }
 
 /// MARK: - refresh access token
-void App::refresh_access_token(const std::shared_ptr<SyncUser>& sync_user, bool update_location,
+void App::refresh_access_token(const std::shared_ptr<AppUser>& sync_user, bool update_location,
                                util::UniqueFunction<void(Optional<AppError>)>&& completion)
 {
     if (!sync_user) {
@@ -1219,14 +1233,24 @@ void App::refresh_access_token(const std::shared_ptr<SyncUser>& sync_user, bool 
     do_request(
         {HttpMethod::post, url_for_path("/auth/session"), m_request_timeout_ms,
          get_request_headers(sync_user, RequestTokenType::RefreshToken)},
-        [completion = std::move(completion), sync_user](const Response& response) {
+        [completion = std::move(completion), sync_user, self = shared_from_this()](const Response& response) {
             if (auto error = AppUtils::check_for_errors(response)) {
                 return completion(std::move(error));
             }
 
             try {
                 auto json = parse<BsonDocument>(response.body);
-                sync_user->update_access_token(get<std::string>(json, "access_token"));
+                auto data = self->get_data(sync_user);
+                if (data.state != SyncUser::State::LoggedIn) {
+                    return completion(util::none);
+                }
+                data.access_token = RealmJWT(get<std::string>(json, "access_token"));
+                self->m_app_backing_store->perform_metadata_update(
+                    [&, raw_access_token = data.access_token.token](const auto& manager) {
+                        auto metadata = manager.get_or_make_user_metadata(sync_user->user_id());
+                        metadata->set_access_token(raw_access_token);
+                    });
+                self->UserProvider::update(sync_user, data);
             }
             catch (AppError& err) {
                 return completion(std::move(err));
@@ -1243,7 +1267,7 @@ std::string App::function_call_url_path() const
     return util::format("%1/functions/call", m_app_route);
 }
 
-void App::call_function(const std::shared_ptr<SyncUser>& user, const std::string& name, std::string_view args_ejson,
+void App::call_function(const std::shared_ptr<AppUser>& user, const std::string& name, std::string_view args_ejson,
                         const Optional<std::string>& service_name_opt,
                         UniqueFunction<void(const std::string*, Optional<AppError>)>&& completion)
 {
@@ -1268,7 +1292,7 @@ void App::call_function(const std::shared_ptr<SyncUser>& user, const std::string
         });
 }
 
-void App::call_function(const std::shared_ptr<SyncUser>& user, const std::string& name, const BsonArray& args_bson,
+void App::call_function(const std::shared_ptr<AppUser>& user, const std::string& name, const BsonArray& args_bson,
                         const Optional<std::string>& service_name,
                         UniqueFunction<void(Optional<Bson>&&, Optional<AppError>)>&& completion)
 {
@@ -1308,7 +1332,7 @@ void App::call_function(const std::shared_ptr<SyncUser>& user, const std::string
                   });
 }
 
-void App::call_function(const std::shared_ptr<SyncUser>& user, const std::string& name, const BsonArray& args_bson,
+void App::call_function(const std::shared_ptr<AppUser>& user, const std::string& name, const BsonArray& args_bson,
                         UniqueFunction<void(Optional<bson::Bson>&&, Optional<AppError>)>&& completion)
 {
     call_function(user, name, args_bson, util::none, std::move(completion));
@@ -1327,7 +1351,7 @@ void App::call_function(const std::string& name, const BsonArray& args_bson,
     call_function(current_user(), name, args_bson, std::move(completion));
 }
 
-Request App::make_streaming_request(const std::shared_ptr<SyncUser>& user, const std::string& name,
+Request App::make_streaming_request(const std::shared_ptr<AppUser>& user, const std::string& name,
                                     const BsonArray& args_bson, const Optional<std::string>& service_name) const
 {
     auto args = BsonDocument{
@@ -1359,6 +1383,80 @@ Request App::make_streaming_request(const std::shared_ptr<SyncUser>& user, const
 PushClient App::push_notification_client(const std::string& service_name)
 {
     return PushClient(service_name, m_config.app_id, m_request_timeout_ms, shared_from_this());
+}
+
+// UserProvider interface
+
+void App::request_access_token_refresh(std::string_view user_id)
+{
+    std::shared_ptr<AppUser> user = m_app_backing_store->get_existing_user(user_id);
+    if (!user || user->state() == SyncUser::State::Removed) {
+        return;
+    }
+    constexpr bool update_location = false;
+    refresh_access_token(user, update_location, [&](util::Optional<AppError> err) {
+        if (err) {
+            log_error("failed to update access token for user %1: '%2'", user_id, err->reason());
+        }
+    });
+}
+
+void App::do_log_out(std::shared_ptr<AppUser> user)
+{
+    REALM_ASSERT(user);
+    const bool is_anonymous = user->is_anonymous();
+
+    if (is_anonymous) {
+        // An Anonymous user can not log back in.
+        // Mark the user as 'dead' in the persisted metadata Realm.
+        m_app_backing_store->perform_metadata_update([&](const auto& manager) {
+            auto metadata = manager.get_or_make_user_metadata(user->user_id(), false);
+            if (metadata)
+                metadata->remove();
+        });
+    }
+    else {
+        m_app_backing_store->perform_metadata_update([&](const auto& manager) {
+            auto metadata = manager.get_or_make_user_metadata(user->user_id());
+            metadata->set_state_and_tokens(SyncUser::State::LoggedOut, "", "");
+        });
+    }
+    UserData data;
+    data.user_id = user->user_id();
+    data.app_id = m_config.app_id;
+    data.access_token = RealmJWT();
+    data.refresh_token = RealmJWT();
+    data.state = is_anonymous ? SyncUser::State::Removed : SyncUser::State::LoggedOut;
+    UserProvider::update(user, data); // will close sessions
+
+    m_app_backing_store->log_out_user(*user);
+}
+
+void App::request_user_log_out(std::string_view user_id)
+{
+    std::shared_ptr<AppUser> user = m_app_backing_store->get_existing_user(user_id);
+    if (!user) {
+        return;
+    }
+    log_out(user, [&](util::Optional<AppError> err) {
+        if (err) {
+            log_error("failed to log out user %1: '%2'", user_id, err->reason());
+        }
+    });
+}
+
+void App::request_location_refresh(std::string_view user_id)
+{
+    std::shared_ptr<AppUser> user = m_app_backing_store->get_existing_user(user_id);
+    if (!user || user->state() == SyncUser::State::Removed) {
+        return;
+    }
+    constexpr bool update_location = true;
+    refresh_access_token(user, update_location, [&](util::Optional<AppError> err) {
+        if (err) {
+            log_error("failed to update location for user %1: '%2'", user_id, err->reason());
+        }
+    });
 }
 
 } // namespace app

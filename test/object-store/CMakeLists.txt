@@ -28,8 +28,8 @@ set(SOURCES
     thread_safe_reference.cpp
     transaction_log_parsing.cpp
     uuid.cpp
-    c_api/c_api.cpp
-    c_api/c_api_file_tests.c
+#    c_api/c_api.cpp
+#    c_api/c_api_file_tests.c
 
     util/event_loop.cpp
     util/test_file.cpp

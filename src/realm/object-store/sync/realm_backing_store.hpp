@@ -24,16 +24,13 @@
 #include <realm/util/checked_mutex.hpp>
 #include <memory>
 
-namespace realm {
-class SyncUser;
+namespace realm::app {
+class App;
+class AppUser;
 class SyncFileManager;
 class SyncMetadataManager;
 class SyncFileActionMetadata;
 class SyncAppMetadata;
-} // namespace realm
-
-namespace realm::app {
-class App;
 
 struct RealmBackingStoreConfig {
     enum class MetadataMode {
@@ -51,14 +48,15 @@ struct RealmBackingStore final : public app::BackingStore {
 
     RealmBackingStore(std::weak_ptr<app::App> parent, RealmBackingStoreConfig config);
     virtual ~RealmBackingStore();
-    std::shared_ptr<SyncUser> get_user(std::string_view user_id, std::string_view refresh_token,
-                                       std::string_view access_token, std::string_view device_id) override
+    std::shared_ptr<AppUser> get_user(std::string_view user_id, std::string_view refresh_token,
+                                      std::string_view access_token, std::string_view device_id) override
         REQUIRES(!m_user_mutex, !m_file_system_mutex);
-    std::shared_ptr<SyncUser> get_existing_logged_in_user(std::string_view user_id) const override
+    std::shared_ptr<AppUser> get_existing_logged_in_user(std::string_view user_id) const override
         REQUIRES(!m_user_mutex);
-    std::vector<std::shared_ptr<SyncUser>> all_users() override REQUIRES(!m_user_mutex);
-    std::shared_ptr<SyncUser> get_current_user() const override REQUIRES(!m_user_mutex, !m_file_system_mutex);
-    void log_out_user(const SyncUser& user) override REQUIRES(!m_user_mutex, !m_file_system_mutex);
+    std::shared_ptr<AppUser> get_existing_user(std::string_view user_id) const override REQUIRES(!m_user_mutex);
+    std::vector<std::shared_ptr<AppUser>> all_users() override REQUIRES(!m_user_mutex);
+    std::shared_ptr<AppUser> get_current_user() const override REQUIRES(!m_user_mutex, !m_file_system_mutex);
+    void log_out_user(const AppUser& user) override REQUIRES(!m_user_mutex, !m_file_system_mutex);
     void set_current_user(std::string_view user_id) override REQUIRES(!m_user_mutex, !m_file_system_mutex);
     void remove_user(std::string_view user_id) override REQUIRES(!m_user_mutex, !m_file_system_mutex);
     void delete_user(std::string_view user_id) override REQUIRES(!m_user_mutex, !m_file_system_mutex);
@@ -67,12 +65,9 @@ struct RealmBackingStore final : public app::BackingStore {
     bool perform_metadata_update(util::FunctionRef<void(SyncMetadataManager&)> update_function) const override
         REQUIRES(!m_file_system_mutex);
 
-    std::string path_for_realm(std::shared_ptr<SyncUser> user, std::optional<std::string> custom_file_name = none,
+    std::string path_for_realm(std::shared_ptr<AppUser> user, std::optional<std::string> custom_file_name = none,
                                std::optional<std::string> partition_value = none) const override
         REQUIRES(!m_file_system_mutex);
-
-    std::string audit_path_root(std::shared_ptr<SyncUser> user, std::string_view app_id,
-                                std::string_view partition_prefix) const override;
 
     std::string recovery_directory_path(std::optional<std::string> const& custom_dir_name = none) const override
         REQUIRES(!m_file_system_mutex);
@@ -85,7 +80,7 @@ struct RealmBackingStore final : public app::BackingStore {
     }
 
 private:
-    std::shared_ptr<SyncUser> get_user_for_identity(std::string_view identity) const noexcept REQUIRES(m_user_mutex);
+    std::shared_ptr<AppUser> get_user_for_identity(std::string_view identity) const noexcept REQUIRES(m_user_mutex);
     bool run_file_action(SyncFileActionMetadata&) REQUIRES(m_file_system_mutex);
     void initialize() REQUIRES(!m_file_system_mutex, !m_user_mutex);
 
@@ -94,9 +89,9 @@ private:
     // Protects m_users
     mutable util::CheckedMutex m_user_mutex;
 
-    // A vector of all SyncUser objects.
-    std::vector<std::shared_ptr<SyncUser>> m_users GUARDED_BY(m_user_mutex);
-    std::shared_ptr<SyncUser> m_current_user GUARDED_BY(m_user_mutex);
+    // A vector of all user objects.
+    std::vector<std::shared_ptr<AppUser>> m_users GUARDED_BY(m_user_mutex);
+    std::shared_ptr<AppUser> m_current_user GUARDED_BY(m_user_mutex);
 
     // Protects m_file_manager and m_metadata_manager
     mutable util::CheckedMutex m_file_system_mutex;

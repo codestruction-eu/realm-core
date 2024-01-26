@@ -68,7 +68,7 @@ void RealmBackingStore::reset_for_testing()
 
 void RealmBackingStore::initialize()
 {
-    std::vector<std::shared_ptr<SyncUser>> users_to_add;
+    std::vector<std::shared_ptr<AppUser>> users_to_add;
     {
         util::CheckedLockGuard lock(m_file_system_mutex);
         // The RealmBackingStore is not designed to be used
@@ -197,14 +197,14 @@ bool RealmBackingStore::perform_metadata_update(util::FunctionRef<void(SyncMetad
     return true;
 }
 
-std::shared_ptr<SyncUser> RealmBackingStore::get_user(std::string_view user_id, std::string_view refresh_token,
-                                                      std::string_view access_token, std::string_view device_id)
+std::shared_ptr<AppUser> RealmBackingStore::get_user(std::string_view user_id, std::string_view refresh_token,
+                                                     std::string_view access_token, std::string_view device_id)
 {
-    std::shared_ptr<SyncUser> user;
+    std::shared_ptr<AppUser> user;
     {
         util::CheckedLockGuard lock(m_user_mutex);
         auto it = std::find_if(m_users.begin(), m_users.end(), [&](const auto& user) {
-            return user->identity() == user_id && user->state() != SyncUser::State::Removed;
+            return user->user_id() == user_id && user->state() != SyncUser::State::Removed;
         });
         if (it == m_users.end()) {
             // No existing user.
@@ -224,11 +224,10 @@ std::shared_ptr<SyncUser> RealmBackingStore::get_user(std::string_view user_id, 
         user = *it;
         REALM_ASSERT(user->state() != SyncUser::State::Removed);
     }
-    user->log_in(access_token, refresh_token);
     return user;
 }
 
-std::vector<std::shared_ptr<SyncUser>> RealmBackingStore::all_users()
+std::vector<std::shared_ptr<AppUser>> RealmBackingStore::all_users()
 {
     util::CheckedLockGuard lock(m_user_mutex);
     m_users.erase(std::remove_if(m_users.begin(), m_users.end(),
@@ -243,16 +242,16 @@ std::vector<std::shared_ptr<SyncUser>> RealmBackingStore::all_users()
     return m_users;
 }
 
-std::shared_ptr<SyncUser> RealmBackingStore::get_user_for_identity(std::string_view identity) const noexcept
+std::shared_ptr<AppUser> RealmBackingStore::get_user_for_identity(std::string_view identity) const noexcept
 {
     auto is_active_user = [identity](auto& el) {
-        return el->identity() == identity;
+        return el->user_id() == identity;
     };
     auto it = std::find_if(m_users.begin(), m_users.end(), is_active_user);
     return it == m_users.end() ? nullptr : *it;
 }
 
-std::shared_ptr<SyncUser> RealmBackingStore::get_current_user() const
+std::shared_ptr<AppUser> RealmBackingStore::get_current_user() const
 {
     util::CheckedLockGuard lock(m_user_mutex);
 
@@ -266,7 +265,7 @@ std::shared_ptr<SyncUser> RealmBackingStore::get_current_user() const
     return cur_user_ident ? get_user_for_identity(*cur_user_ident) : nullptr;
 }
 
-void RealmBackingStore::log_out_user(const SyncUser& user)
+void RealmBackingStore::log_out_user(const AppUser& user)
 {
     util::CheckedLockGuard lock(m_user_mutex);
 
@@ -281,7 +280,7 @@ void RealmBackingStore::log_out_user(const SyncUser& user)
 
     util::CheckedLockGuard fs_lock(m_file_system_mutex);
     bool was_active = m_current_user.get() == &user ||
-                      (m_metadata_manager && m_metadata_manager->get_current_user_identity() == user.identity());
+                      (m_metadata_manager && m_metadata_manager->get_current_user_identity() == user.user_id());
     if (!was_active)
         return;
 
@@ -289,7 +288,7 @@ void RealmBackingStore::log_out_user(const SyncUser& user)
     if (active_user != user_pos) {
         m_current_user = *active_user;
         if (m_metadata_manager)
-            m_metadata_manager->set_current_user_identity((*active_user)->identity());
+            m_metadata_manager->set_current_user_identity((*active_user)->user_id());
     }
     else {
         m_current_user = nullptr;
@@ -310,9 +309,11 @@ void RealmBackingStore::set_current_user(std::string_view user_id)
 
 void RealmBackingStore::remove_user(std::string_view user_id)
 {
-    util::CheckedLockGuard lock(m_user_mutex);
-    if (auto user = get_user_for_identity(user_id))
-        user->invalidate();
+    util::CheckedLockGuard lock(m_file_system_mutex);
+    if (m_metadata_manager) {
+        auto metadata = m_metadata_manager->get_or_make_user_metadata(user_id);
+        metadata->set_state_and_tokens(SyncUser::State::Removed, "", "");
+    }
 }
 
 void RealmBackingStore::delete_user(std::string_view user_id)
@@ -320,7 +321,7 @@ void RealmBackingStore::delete_user(std::string_view user_id)
     util::CheckedLockGuard lock(m_user_mutex);
     // Avoid iterating over m_users twice by not calling `get_user_for_identity`.
     auto it = std::find_if(m_users.begin(), m_users.end(), [&user_id](auto& user) {
-        return user->identity() == user_id;
+        return user->user_id() == user_id;
     });
     auto user = it == m_users.end() ? nullptr : *it;
 
@@ -332,7 +333,7 @@ void RealmBackingStore::delete_user(std::string_view user_id)
     m_users.erase(it);
     user->detach_from_backing_store();
 
-    if (m_current_user && m_current_user->identity() == user->identity())
+    if (m_current_user && m_current_user->user_id() == user->user_id())
         m_current_user = nullptr;
 
     util::CheckedLockGuard fs_lock(m_file_system_mutex);
@@ -342,7 +343,7 @@ void RealmBackingStore::delete_user(std::string_view user_id)
     auto users = m_metadata_manager->all_unmarked_users();
     for (size_t i = 0; i < users.size(); i++) {
         auto metadata = users.get(i);
-        if (user->identity() == metadata.identity()) {
+        if (user->user_id() == metadata.identity()) {
             m_file_manager->remove_user_realms(metadata.identity(), metadata.realm_file_paths());
             metadata.remove();
             break;
@@ -350,11 +351,18 @@ void RealmBackingStore::delete_user(std::string_view user_id)
     }
 }
 
-std::shared_ptr<SyncUser> RealmBackingStore::get_existing_logged_in_user(std::string_view user_id) const
+std::shared_ptr<AppUser> RealmBackingStore::get_existing_logged_in_user(std::string_view user_id) const
 {
     util::CheckedLockGuard lock(m_user_mutex);
     auto user = get_user_for_identity(user_id);
     return user && user->state() == SyncUser::State::LoggedIn ? user : nullptr;
+}
+
+std::shared_ptr<AppUser> RealmBackingStore::get_existing_user(std::string_view user_id) const
+{
+    util::CheckedLockGuard lock(m_user_mutex);
+    auto user = get_user_for_identity(user_id);
+    return user;
 }
 
 struct UnsupportedBsonPartition : public std::logic_error {
@@ -387,7 +395,7 @@ static std::string string_from_partition(std::string_view partition)
     }
 }
 
-std::string RealmBackingStore::path_for_realm(std::shared_ptr<SyncUser> user,
+std::string RealmBackingStore::path_for_realm(std::shared_ptr<AppUser> user,
                                               std::optional<std::string> custom_file_name,
                                               std::optional<std::string> partition_value) const
 {
@@ -408,31 +416,15 @@ std::string RealmBackingStore::path_for_realm(std::shared_ptr<SyncUser> user,
             }
             return string_from_partition(*partition_value);
         }();
-        path = m_file_manager->realm_file_path(user->identity(), user->legacy_identities(), file_name,
+        path = m_file_manager->realm_file_path(user->user_id(), user->legacy_identities(), file_name,
                                                partition_value.value_or(""));
     }
     // Report the use of a Realm for this user, so the metadata can track it for clean up.
     perform_metadata_update([&](const auto& manager) {
-        auto metadata = manager.get_or_make_user_metadata(user->identity());
+        auto metadata = manager.get_or_make_user_metadata(user->user_id());
         metadata->add_realm_file_path(path);
     });
     return path;
-}
-
-std::string RealmBackingStore::audit_path_root(std::shared_ptr<SyncUser> user, std::string_view app_id,
-                                               std::string_view partition_prefix) const
-{
-    REALM_ASSERT(user);
-
-#ifdef _WIN32 // Move to File?
-    const char separator[] = "\\";
-#else
-    const char separator[] = "/";
-#endif
-
-    // "$root/realm-audit/$appId/$userId/$partitonPrefix/"
-    return util::format("%2%1realm-audit%1%3%1%4%1%5%1", separator, m_config.base_file_path, app_id, user->identity(),
-                        partition_prefix);
 }
 
 std::string RealmBackingStore::recovery_directory_path(util::Optional<std::string> const& custom_dir_name) const
@@ -442,7 +434,7 @@ std::string RealmBackingStore::recovery_directory_path(util::Optional<std::strin
     return m_file_manager->recovery_directory_path(custom_dir_name);
 }
 
-std::optional<SyncAppMetadata> RealmBackingStore::app_metadata() const
+std::optional<app::SyncAppMetadata> RealmBackingStore::app_metadata() const
 {
     util::CheckedLockGuard lock(m_file_system_mutex);
     if (!m_metadata_manager) {

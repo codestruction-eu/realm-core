@@ -255,6 +255,7 @@ endif()
 
 # Options (passed to CMake)
 option(REALM_ENABLE_SYNC "Enable synchronized realms." ON)
+option(REALM_APP_SERVICES "Enable MongoDB application services." ON)
 option(REALM_BUILD_TEST_CLIENT "Build the test client" OFF)
 option(REALM_ENABLE_ASSERTIONS "Enable assertions in release mode." OFF)
 option(REALM_ENABLE_ALLOC_SET_ZERO "Zero all allocations." OFF)
@@ -405,8 +406,9 @@ set(REALM_EXPORTED_TARGETS
     Storage
     QueryParser
     ObjectStore
-    RealmFFI
-    RealmFFIStatic
+# FIXME:
+#    RealmFFI
+#    RealmFFIStatic
 )
 if(REALM_ENABLE_SYNC)
     list(APPEND REALM_EXPORTED_TARGETS Sync)

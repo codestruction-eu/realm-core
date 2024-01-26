@@ -52,7 +52,7 @@ std::ostream& operator<<(std::ostream& os, util::Optional<app::AppError> error)
     return os;
 }
 
-bool results_contains_user(SyncUserMetadataResults& results, const std::string& identity)
+bool results_contains_user(app::SyncUserMetadataResults& results, const std::string& identity)
 {
     for (size_t i = 0; i < results.size(); i++) {
         auto this_result = results.get(i);
@@ -63,7 +63,7 @@ bool results_contains_user(SyncUserMetadataResults& results, const std::string& 
     return false;
 }
 
-bool results_contains_original_name(SyncFileActionMetadataResults& results, const std::string& original_name)
+bool results_contains_original_name(app::SyncFileActionMetadataResults& results, const std::string& original_name)
 {
     for (size_t i = 0; i < results.size(); i++) {
         if (results.get(i).original_name() == original_name) {

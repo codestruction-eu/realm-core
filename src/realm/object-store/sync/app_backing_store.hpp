@@ -24,18 +24,19 @@
 #include <string>
 #include <vector>
 
-#include <realm/object-store/sync/sync_user.hpp>
+#include <realm/object-store/sync/app_user.hpp>
 #include <realm/util/function_ref.hpp>
 
 namespace realm {
 
-class SyncAppMetadata;
-class SyncMetadataManager;
 class SyncUser;
 
 namespace app {
 
 class App;
+class SyncAppMetadata;
+class SyncMetadataManager;
+class SyncUserMetadata;
 
 class BackingStore {
 public:
@@ -45,20 +46,22 @@ public:
     }
     // Get a sync user for a given identity, or create one if none exists yet, and set its token.
     // If a logged-out user exists, it will marked as logged back in.
-    virtual std::shared_ptr<SyncUser> get_user(std::string_view user_id, std::string_view refresh_token,
-                                               std::string_view access_token, std::string_view device_id) = 0;
+    virtual std::shared_ptr<AppUser> get_user(std::string_view user_id, std::string_view refresh_token,
+                                              std::string_view access_token, std::string_view device_id) = 0;
 
     // Get an existing user for a given identifier, if one exists and is logged in.
-    virtual std::shared_ptr<SyncUser> get_existing_logged_in_user(std::string_view user_id) const = 0;
+    virtual std::shared_ptr<AppUser> get_existing_logged_in_user(std::string_view user_id) const = 0;
+
+    virtual std::shared_ptr<AppUser> get_existing_user(std::string_view user_id) const = 0;
 
     // Get all the users that are logged in and not errored out.
-    virtual std::vector<std::shared_ptr<SyncUser>> all_users() = 0;
+    virtual std::vector<std::shared_ptr<AppUser>> all_users() = 0;
 
     // Gets the currently active user.
-    virtual std::shared_ptr<SyncUser> get_current_user() const = 0;
+    virtual std::shared_ptr<AppUser> get_current_user() const = 0;
 
     // Log out a given user
-    virtual void log_out_user(const SyncUser& user) = 0;
+    virtual void log_out_user(const AppUser& user) = 0;
 
     // Sets the currently active user.
     virtual void set_current_user(std::string_view user_id) = 0;
@@ -92,13 +95,9 @@ public:
     // If partition_value is empty, FLX sync is requested
     // otherwise this is for a PBS Realm and the string
     // is a BSON formatted value.
-    virtual std::string path_for_realm(std::shared_ptr<SyncUser> user,
+    virtual std::string path_for_realm(std::shared_ptr<AppUser> user,
                                        std::optional<std::string> custom_file_name = std::nullopt,
                                        std::optional<std::string> partition_value = std::nullopt) const = 0;
-
-    // Get the base path where audit Realms will be stored. This path may need to be created.
-    virtual std::string audit_path_root(std::shared_ptr<SyncUser> user, std::string_view app_id,
-                                        std::string_view partition_prefix) const = 0;
 
     // Get the path of the recovery directory for backed-up or recovered Realms.
     virtual std::string
@@ -110,16 +109,16 @@ public:
 protected:
     // these methods allow only derived backing stores to construct SyncUsers
     // because SyncUser has a private constructor but BackingStore is a friend class
-    std::shared_ptr<SyncUser> make_user(std::string_view refresh_token, std::string_view id,
-                                        std::string_view access_token, std::string_view device_id,
-                                        std::shared_ptr<app::App> app) const
+    std::shared_ptr<AppUser> make_user(std::string_view refresh_token, std::string_view id,
+                                       std::string_view access_token, std::string_view device_id,
+                                       std::shared_ptr<app::App> app) const
     {
-        return std::make_shared<SyncUser>(SyncUser::Private{}, refresh_token, id, access_token, device_id,
-                                          std::move(app));
+        return std::make_shared<AppUser>(AppUser::Private{}, refresh_token, id, access_token, device_id,
+                                         std::move(app));
     }
-    std::shared_ptr<SyncUser> make_user(const SyncUserMetadata& data, std::shared_ptr<app::App> app) const
+    std::shared_ptr<AppUser> make_user(const SyncUserMetadata& data, std::shared_ptr<app::App> app) const
     {
-        return std::make_shared<SyncUser>(SyncUser::Private{}, data, std::move(app));
+        return std::make_shared<AppUser>(AppUser::Private{}, data, std::move(app));
     }
 
     std::weak_ptr<app::App> m_parent_app;

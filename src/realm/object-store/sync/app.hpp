@@ -27,6 +27,7 @@
 #include <realm/object-store/sync/push_client.hpp>
 #include <realm/object-store/sync/realm_backing_store.hpp>
 #include <realm/object-store/sync/subscribable.hpp>
+#include <realm/object-store/sync/user_provider.hpp>
 
 #include <realm/object_id.hpp>
 #include <realm/util/checked_mutex.hpp>
@@ -46,6 +47,7 @@ class SyncAppMetadata;
 namespace app {
 
 class App;
+class AppUser;
 
 typedef std::shared_ptr<App> SharedApp;
 
@@ -57,7 +59,8 @@ typedef std::shared_ptr<App> SharedApp;
 class App : public std::enable_shared_from_this<App>,
             public AuthRequestClient,
             public AppServiceClient,
-            public Subscribable<App> {
+            public Subscribable<App>,
+            public UserProvider {
 
     struct Private {};
 
@@ -106,10 +109,10 @@ public:
     }
 
     /// Get the last used user.
-    std::shared_ptr<SyncUser> current_user() const;
+    std::shared_ptr<AppUser> current_user() const;
 
     /// Get all users.
-    std::vector<std::shared_ptr<SyncUser>> all_users() const;
+    std::vector<std::shared_ptr<AppUser>> all_users() const;
 
     /// Get the BackingStore for this App.
     std::shared_ptr<BackingStore> const& backing_store() const
@@ -117,7 +120,7 @@ public:
         return m_app_backing_store;
     }
 
-    std::shared_ptr<SyncManager> const& sync_manager() const
+    std::shared_ptr<SyncManager> const& sync_manager() const override
     {
         return m_sync_manager;
     }
@@ -146,40 +149,40 @@ public:
         /// Creates a user API key that can be used to authenticate as the current user.
         /// @param name The name of the API key to be created.
         /// @param completion A callback to be invoked once the call is complete.
-        void create_api_key(const std::string& name, const std::shared_ptr<SyncUser>& user,
+        void create_api_key(const std::string& name, const std::shared_ptr<AppUser>& user,
                             util::UniqueFunction<void(UserAPIKey&&, util::Optional<AppError>)>&& completion);
 
         /// Fetches a user API key associated with the current user.
         /// @param id The id of the API key to fetch.
         /// @param completion A callback to be invoked once the call is complete.
-        void fetch_api_key(const realm::ObjectId& id, const std::shared_ptr<SyncUser>& user,
+        void fetch_api_key(const realm::ObjectId& id, const std::shared_ptr<AppUser>& user,
                            util::UniqueFunction<void(UserAPIKey&&, util::Optional<AppError>)>&& completion);
 
         /// Fetches the user API keys associated with the current user.
         /// @param completion A callback to be invoked once the call is complete.
         void
-        fetch_api_keys(const std::shared_ptr<SyncUser>& user,
+        fetch_api_keys(const std::shared_ptr<AppUser>& user,
                        util::UniqueFunction<void(std::vector<UserAPIKey>&&, util::Optional<AppError>)>&& completion);
 
         /// Deletes a user API key associated with the current user.
         /// @param id The id of the API key to delete.
         /// @param user The user to perform this operation.
         /// @param completion A callback to be invoked once the call is complete.
-        void delete_api_key(const realm::ObjectId& id, const std::shared_ptr<SyncUser>& user,
+        void delete_api_key(const realm::ObjectId& id, const std::shared_ptr<AppUser>& user,
                             util::UniqueFunction<void(util::Optional<AppError>)>&& completion);
 
         /// Enables a user API key associated with the current user.
         /// @param id The id of the API key to enable.
         /// @param user The user to perform this operation.
         /// @param completion A callback to be invoked once the call is complete.
-        void enable_api_key(const realm::ObjectId& id, const std::shared_ptr<SyncUser>& user,
+        void enable_api_key(const realm::ObjectId& id, const std::shared_ptr<AppUser>& user,
                             util::UniqueFunction<void(util::Optional<AppError>)>&& completion);
 
         /// Disables a user API key associated with the current user.
         /// @param id The id of the API key to disable.
         /// @param user The user to perform this operation.
         /// @param completion A callback to be invoked once the call is complete.
-        void disable_api_key(const realm::ObjectId& id, const std::shared_ptr<SyncUser>& user,
+        void disable_api_key(const realm::ObjectId& id, const std::shared_ptr<AppUser>& user,
                              util::UniqueFunction<void(util::Optional<AppError>)>&& completion);
 
     private:
@@ -300,7 +303,7 @@ public:
 
     /// Log in a user and asynchronously retrieve a user object.
     /// If the log in completes successfully, the completion block will be called, and a
-    /// `SyncUser` representing the logged-in user will be passed to it. This user object
+    /// `AppUser` representing the logged-in user will be passed to it. This user object
     /// can be used to open `Realm`s and retrieve `SyncSession`s. Otherwise, the
     /// completion block will be called with an error.
     ///
@@ -308,7 +311,7 @@ public:
     /// @param completion A callback block to be invoked once the log in completes.
     void log_in_with_credentials(
         const AppCredentials& credentials,
-        util::UniqueFunction<void(const std::shared_ptr<SyncUser>&, util::Optional<AppError>)>&& completion)
+        util::UniqueFunction<void(const std::shared_ptr<AppUser>&, util::Optional<AppError>)>&& completion)
         REQUIRES(!m_route_mutex);
 
     /// Logout the current user.
@@ -317,29 +320,28 @@ public:
     /// Refreshes the custom data for a specified user
     /// @param user The user you want to refresh
     /// @param update_location If true, the location metadata will be updated before refresh
-    void refresh_custom_data(const std::shared_ptr<SyncUser>& user, bool update_location,
+    void refresh_custom_data(const std::shared_ptr<AppUser>& user, bool update_location,
                              util::UniqueFunction<void(util::Optional<AppError>)>&& completion)
         REQUIRES(!m_route_mutex);
-    void refresh_custom_data(const std::shared_ptr<SyncUser>& user,
+    void refresh_custom_data(const std::shared_ptr<AppUser>& user,
                              util::UniqueFunction<void(util::Optional<AppError>)>&& completion)
         REQUIRES(!m_route_mutex);
 
     /// Log out the given user if they are not already logged out.
-    void log_out(const std::shared_ptr<SyncUser>& user,
+    void log_out(const std::shared_ptr<AppUser>& user,
                  util::UniqueFunction<void(util::Optional<AppError>)>&& completion) REQUIRES(!m_route_mutex);
 
     /// Links the currently authenticated user with a new identity, where the identity is defined by the credential
-    /// specified as a parameter. This will only be successful if this `SyncUser` is the currently authenticated
+    /// specified as a parameter. This will only be successful if this `AppUser` is the currently authenticated
     /// with the client from which it was created. On success the user will be returned with the new identity.
     ///
     /// @param user The user which will have the credentials linked to, the user must be logged in
     /// @param credentials The `AppCredentials` used to link the user to a new identity.
     /// @param completion The completion handler to call when the linking is complete.
     ///                         If the operation is  successful, the result will contain the original
-    ///                         `SyncUser` object representing the user.
-    void
-    link_user(const std::shared_ptr<SyncUser>& user, const AppCredentials& credentials,
-              util::UniqueFunction<void(const std::shared_ptr<SyncUser>&, util::Optional<AppError>)>&& completion)
+    ///                         `AppUser` object representing the user.
+    void link_user(const std::shared_ptr<AppUser>& user, const AppCredentials& credentials,
+                   util::UniqueFunction<void(const std::shared_ptr<AppUser>&, util::Optional<AppError>)>&& completion)
         REQUIRES(!m_route_mutex);
 
     /// Switches the active user with the specified one. The user must
@@ -349,19 +351,19 @@ public:
     ///
     /// @param user The user to switch to
     /// @returns A shared pointer to the new current user
-    std::shared_ptr<SyncUser> switch_user(const std::shared_ptr<SyncUser>& user) const;
+    std::shared_ptr<AppUser> switch_user(const std::shared_ptr<AppUser>& user) const;
 
     /// Logs out and removes the provided user.
     /// This invokes logout on the server.
     /// @param user the user to remove
     /// @param completion Will return an error if the user is not found or the http request failed.
-    void remove_user(const std::shared_ptr<SyncUser>& user,
+    void remove_user(const std::shared_ptr<AppUser>& user,
                      util::UniqueFunction<void(util::Optional<AppError>)>&& completion) REQUIRES(!m_route_mutex);
 
     /// Deletes a user and all its data from the server.
     /// @param user The user to delete
     /// @param completion Will return an error if the user is not found or the http request failed.
-    void delete_user(const std::shared_ptr<SyncUser>& user,
+    void delete_user(const std::shared_ptr<AppUser>& user,
                      util::UniqueFunction<void(util::Optional<AppError>)>&& completion) REQUIRES(!m_route_mutex);
 
     // Get a provider client for the given class type.
@@ -371,19 +373,19 @@ public:
         return T(this);
     }
 
-    void call_function(const std::shared_ptr<SyncUser>& user, const std::string& name, std::string_view args_ejson,
+    void call_function(const std::shared_ptr<AppUser>& user, const std::string& name, std::string_view args_ejson,
                        const util::Optional<std::string>& service_name,
                        util::UniqueFunction<void(const std::string*, util::Optional<AppError>)>&& completion) final
         REQUIRES(!m_route_mutex);
 
     void call_function(
-        const std::shared_ptr<SyncUser>& user, const std::string& name, const bson::BsonArray& args_bson,
+        const std::shared_ptr<AppUser>& user, const std::string& name, const bson::BsonArray& args_bson,
         const util::Optional<std::string>& service_name,
         util::UniqueFunction<void(util::Optional<bson::Bson>&&, util::Optional<AppError>)>&& completion) final
         REQUIRES(!m_route_mutex);
 
     void call_function(
-        const std::shared_ptr<SyncUser>& user, const std::string&, const bson::BsonArray& args_bson,
+        const std::shared_ptr<AppUser>& user, const std::string&, const bson::BsonArray& args_bson,
         util::UniqueFunction<void(util::Optional<bson::Bson>&&, util::Optional<AppError>)>&& completion) final
         REQUIRES(!m_route_mutex);
 
@@ -398,7 +400,7 @@ public:
         REQUIRES(!m_route_mutex);
 
     template <typename T>
-    void call_function(const std::shared_ptr<SyncUser>& user, const std::string& name,
+    void call_function(const std::shared_ptr<AppUser>& user, const std::string& name,
                        const bson::BsonArray& args_bson,
                        util::UniqueFunction<void(util::Optional<T>&&, util::Optional<AppError>)>&& completion)
         REQUIRES(!m_route_mutex)
@@ -425,7 +427,7 @@ public:
 
     // NOTE: only sets "Accept: text/event-stream" header. If you use an API that sets that but doesn't support
     // setting other headers (eg. EventSource() in JS), you can ignore the headers field on the request.
-    Request make_streaming_request(const std::shared_ptr<SyncUser>& user, const std::string& name,
+    Request make_streaming_request(const std::shared_ptr<AppUser>& user, const std::string& name,
                                    const bson::BsonArray& args_bson,
                                    const util::Optional<std::string>& service_name) const REQUIRES(!m_route_mutex);
 
@@ -444,6 +446,11 @@ public:
 
     // Return the base url path used for Sync Session Websocket requests
     std::string get_ws_host_url() REQUIRES(!m_route_mutex);
+
+    // UserProvider interface
+    void request_access_token_refresh(std::string_view user_id) override REQUIRES(!m_route_mutex);
+    void request_user_log_out(std::string_view user_id) override REQUIRES(!m_route_mutex);
+    void request_location_refresh(std::string_view user_id) override REQUIRES(!m_route_mutex);
 
 private:
     // Local copy of app config
@@ -493,10 +500,10 @@ private:
     template <class... Params>
     void log_error(const char* message, Params&&... params);
 
-    /// Refreshes the access token for a specified `SyncUser`
+    /// Refreshes the access token for a specified `AppUser`
     /// @param completion Passes an error should one occur.
     /// @param update_location If true, the location metadata will be updated before refresh
-    void refresh_access_token(const std::shared_ptr<SyncUser>& user, bool update_location,
+    void refresh_access_token(const std::shared_ptr<AppUser>& user, bool update_location,
                               util::UniqueFunction<void(util::Optional<AppError>)>&& completion)
         REQUIRES(!m_route_mutex);
 
@@ -508,7 +515,7 @@ private:
     /// @param completion returns the original response in the case it is not an auth error, or if a failure
     /// occurs, if the refresh was a success the newly attempted response will be passed back
     void handle_auth_failure(const AppError& error, const Response& response, Request&& request,
-                             const std::shared_ptr<SyncUser>& sync_user,
+                             const std::shared_ptr<AppUser>& sync_user,
                              util::UniqueFunction<void(const Response&)>&& completion) REQUIRES(!m_route_mutex);
 
     std::string url_for_path(const std::string& path) const override REQUIRES(!m_route_mutex);
@@ -564,30 +571,30 @@ private:
     /// Performs an authenticated request to the Stitch server, using the current authentication state
     /// @param request The request to be performed
     /// @param completion Returns the response from the server
-    void do_authenticated_request(Request&& request, const std::shared_ptr<SyncUser>& user,
+    void do_authenticated_request(Request&& request, const std::shared_ptr<AppUser>& user,
                                   util::UniqueFunction<void(const Response&)>&& completion) override
         REQUIRES(!m_route_mutex);
 
 
-    /// Gets the social profile for a `SyncUser`
-    /// @param completion Callback will pass the `SyncUser` with the social profile details
+    /// Gets the social profile for a `AppUser`
+    /// @param completion Callback will pass the `AppUser` with the social profile details
     void
-    get_profile(const std::shared_ptr<SyncUser>& user,
-                util::UniqueFunction<void(const std::shared_ptr<SyncUser>&, util::Optional<AppError>)>&& completion)
+    get_profile(const std::shared_ptr<AppUser>& user,
+                util::UniqueFunction<void(const std::shared_ptr<AppUser>&, util::Optional<AppError>)>&& completion)
         REQUIRES(!m_route_mutex);
 
     /// Log in a user and asynchronously retrieve a user object.
     /// If the log in completes successfully, the completion block will be called, and a
-    /// `SyncUser` representing the logged-in user will be passed to it. This user object
+    /// `AppUser` representing the logged-in user will be passed to it. This user object
     /// can be used to open `Realm`s and retrieve `SyncSession`s. Otherwise, the
     /// completion block will be called with an error.
     ///
     /// @param credentials A `SyncCredentials` object representing the user to log in.
-    /// @param linking_user A `SyncUser` you want to link these credentials too
+    /// @param linking_user A `AppUser` you want to link these credentials too
     /// @param completion A callback block to be invoked once the log in completes.
     void log_in_with_credentials(
-        const AppCredentials& credentials, const std::shared_ptr<SyncUser>& linking_user,
-        util::UniqueFunction<void(const std::shared_ptr<SyncUser>&, util::Optional<AppError>)>&& completion)
+        const AppCredentials& credentials, const std::shared_ptr<AppUser>& linking_user,
+        util::UniqueFunction<void(const std::shared_ptr<AppUser>&, util::Optional<AppError>)>&& completion)
         REQUIRES(!m_route_mutex);
 
     /// Provides MongoDB Realm Cloud with metadata related to the users session
@@ -596,6 +603,7 @@ private:
     std::string function_call_url_path() const REQUIRES(!m_route_mutex);
 
     static SharedApp do_get_app(CacheMode mode, const Config& config, util::FunctionRef<void(SharedApp)> do_config);
+    void do_log_out(std::shared_ptr<AppUser> user);
 
     // Requires locking m_route_mutex before calling
     std::string make_sync_route(util::Optional<std::string> ws_host_url = util::none) REQUIRES(m_route_mutex);
@@ -610,7 +618,7 @@ private:
     std::string auth_route() REQUIRES(!m_route_mutex);
     std::string base_url() REQUIRES(!m_route_mutex);
 
-    bool verify_user_present(const std::shared_ptr<SyncUser>& user) const;
+    bool verify_user_present(const std::shared_ptr<AppUser>& user) const;
 };
 
 // MARK: Provider client templates
