@@ -2857,7 +2857,6 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
                 }
                 else if (request_count == 1) {
                     logger->trace("request.url (%1): %2", request_count, request.url);
-                    REQUIRE(!request.redirect_count);
                     ++request_count;
                     return Response{301,
                                     0,
@@ -2978,7 +2977,6 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
                 logger->trace("original_url (%1): %2", request_count, original_url);
             }
             else if (request_count++ == 1) {
-                REQUIRE(!request.redirect_count);
                 return Response{
                     308, 0, {{"Location", redirect_url}, {"Content-Type", "application/json"}}, "Some body data"};
             }
@@ -3104,7 +3102,6 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
                     // First request should be a location request against the original URL
                     REQUIRE(request.url.find(original_host) != std::string::npos);
                     REQUIRE(request.url.find("/location") != std::string::npos);
-                    REQUIRE(request.redirect_count == 0);
                     return Response{static_cast<int>(sync::HTTPStatus::PermanentRedirect),
                                     0,
                                     {{"Location", redirect_url}, {"Content-Type", "application/json"}},
@@ -3162,7 +3159,6 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
                     // First request should be a location request against the original URL
                     REQUIRE(request.url.find(original_host) != std::string::npos);
                     REQUIRE(request.url.find("/location") != std::string::npos);
-                    REQUIRE(request.redirect_count == 0);
                     return Response{static_cast<int>(sync::HTTPStatus::MovedPermanently),
                                     0,
                                     {{"Location", redirect_url}, {"Content-Type", "application/json"}},
@@ -3217,11 +3213,10 @@ TEST_CASE("app: sync integration", "[sync][pbs][app][baas]") {
                     // First request should be a location request against the original URL
                     REQUIRE(request.url.find(original_host) != std::string::npos);
                     REQUIRE(request.url.find("/location") != std::string::npos);
-                    REQUIRE(request.redirect_count == 0);
                 }
                 if (request.url.find("/location") != std::string::npos) {
+                    REQUIRE(request_count <= max_http_redirects + 1);
                     // Keep returning the redirected response
-                    REQUIRE(request.redirect_count < max_http_redirects);
                     return Response{static_cast<int>(sync::HTTPStatus::MovedPermanently),
                                     0,
                                     {{"Location", redirect_url}, {"Content-Type", "application/json"}},

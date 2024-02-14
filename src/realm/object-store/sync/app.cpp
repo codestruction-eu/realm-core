@@ -966,17 +966,16 @@ void App::request_location(UniqueFunction<void(std::optional<AppError>)>&& compl
     req.method = HttpMethod::get;
     req.url = util::format("%1/location", app_route);
     req.timeout_ms = m_request_timeout_ms;
-    req.redirect_count = redirect_count;
 
     log_debug("App: request location: %1", req.url);
 
     m_config.transport->send_request_to_server(
-        std::move(req), [self = shared_from_this(), completion = std::move(completion),
-                         base_url = std::move(base_url)](Request&& request, const Response& response) mutable {
+        req, [self = shared_from_this(), completion = std::move(completion), base_url = std::move(base_url),
+              redirect_count](const Response& response) mutable {
             // Check to see if a redirect occurred
             if (AppUtils::is_redirect_status_code(response.http_status_code)) {
                 // Make sure we don't do too many redirects (max_http_redirects (20) is an arbitrary number)
-                if (++request.redirect_count >= s_max_http_redirects) {
+                if (redirect_count >= s_max_http_redirects) {
                     completion(AppError{ErrorCodes::ClientTooManyRedirects,
                                         util::format("number of redirections exceeded %1", s_max_http_redirects),
                                         {},
@@ -997,8 +996,8 @@ void App::request_location(UniqueFunction<void(std::optional<AppError>)>&& compl
                 // try to request the location info at the new location in the redirect response
                 // retry_count is passed in to track the number of subsequent redirection attempts
                 self->request_location(std::move(completion), std::move(base_url), std::move(redir_location),
-                                       request.redirect_count);
-                return; // early return
+                                       redirect_count + 1);
+                return;
             }
             // Location request was successful - update the location info
             auto update_response = self->update_location(response, base_url);
@@ -1071,11 +1070,11 @@ void App::update_location_and_resend(Request&& request, UniqueFunction<void(cons
             request.url = self->get_host_url() + comp.get_value().request;
 
             // Retry the original request with the updated url
-            self->m_config.transport->send_request_to_server(
-                std::move(request), [self = std::move(self), completion = std::move(completion)](
-                                        Request&& request, const Response& response) mutable {
-                    self->check_for_redirect_response(std::move(request), response, std::move(completion));
-                });
+            self->m_config.transport->send_request_to_server(request, [self = std::move(self),
+                                                                       completion = std::move(completion),
+                                                                       request](const Response& response) mutable {
+                self->check_for_redirect_response(std::move(request), response, std::move(completion));
+            });
         },
         // The base_url is not changing for this request
         util::none, std::move(redir_location));
@@ -1117,8 +1116,8 @@ void App::do_request(Request&& request, UniqueFunction<void(const Response& resp
 
     // If location info has already been updated, then send the request directly
     m_config.transport->send_request_to_server(
-        std::move(request), [self = shared_from_this(), completion = std::move(completion)](
-                                Request&& request, const Response& response) mutable {
+        request,
+        [self = shared_from_this(), completion = std::move(completion), request](const Response& response) mutable {
             self->check_for_redirect_response(std::move(request), response, std::move(completion));
         });
 }
