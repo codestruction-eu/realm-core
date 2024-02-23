@@ -2015,6 +2015,7 @@ class Columns<Decimal128> : public SimpleQuerySupport<Decimal128> {
 template <>
 class Columns<Mixed> : public SimpleQuerySupport<Mixed> {
 public:
+    using SimpleQuerySupport::evaluate; // don't hide the ObjKey overload
     using SimpleQuerySupport::SimpleQuerySupport;
     void evaluate(size_t index, ValueBase& destination) override
     {
