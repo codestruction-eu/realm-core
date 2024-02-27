@@ -3355,7 +3355,7 @@ public:
     {
     }
 
-protected:
+private:
     DataType m_key_type = type_String;
     Path m_path;
     bool m_path_only_unary_keys;

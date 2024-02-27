@@ -270,20 +270,13 @@ ColumnDictionaryKeys Columns<Dictionary>::keys()
 
 void Columns<Dictionary>::init_path(const PathElement* begin, const PathElement* end)
 {
-    m_path.clear();
-    m_path_only_unary_keys = true;
-    while (begin != end) {
-        if (begin->is_all()) {
-            m_path_only_unary_keys = false;
-        }
-        m_path.emplace_back(std::move(*begin));
-        ++begin;
-    }
-    std::move(begin, end, std::back_inserter(m_path));
+    m_path.assign(begin, end);
     if (m_path.empty()) {
-        m_path_only_unary_keys = false;
         m_path.push_back(PathElement::AllTag());
     }
+    m_path_only_unary_keys = std::all_of(begin, end, [](auto& elem) {
+        return !elem.is_all();
+    });
 }
 
 void ColumnDictionaryKeys::set_cluster(const Cluster* cluster)
