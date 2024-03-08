@@ -56,6 +56,7 @@ public:
 
     struct PendingBatch {
         int64_t query_version = 0;
+        int64_t remote_version = 0;
         std::vector<RemoteChangeset> changesets;
         std::vector<util::AppendBuffer<char>> changeset_data;
         util::Optional<SyncProgress> progress;
@@ -66,8 +67,12 @@ public:
     // state.
     PendingBatch peek_pending(size_t limit_in_bytes);
 
+    std::optional<int64_t> remote_version();
+    std::optional<int64_t> query_version();
+
     struct PendingBatchStats {
         int64_t query_version = 0;
+        int64_t remote_version = 0;
         size_t pending_changesets = 0;
         size_t pending_changeset_bytes = 0;
     };
@@ -77,14 +82,16 @@ public:
     // writing state.
     void pop_front_pending(const TransactionRef& tr, size_t count);
 
-    // Adds a set of changesets to the store.
-    void add_batch(int64_t query_version, util::Optional<SyncProgress> progress,
+    // Adds a set of changesets to the store - returns false if the changesets were not added
+    bool add_batch(int64_t query_version, int64_t remote_version, util::Optional<SyncProgress> progress,
                    const std::vector<RemoteChangeset>& changesets, bool* created_new_batch);
 
     void clear();
 
 
 private:
+    void reset_state();
+
     DBRef m_db;
     // The pending_bootstrap_store is tied to the lifetime of a session, so a shared_ptr is not needed
     util::Logger& m_logger;
@@ -93,9 +100,9 @@ private:
     TableKey m_cursor_table;
 
     TableKey m_table;
-    ColKey m_changesets;
-    ColKey m_query_version;
-    ColKey m_progress;
+    ColKey m_changesets_col;
+    ColKey m_query_version_col;
+    ColKey m_progress_col;
 
     TableKey m_progress_table;
     ColKey m_progress_download_server_version;
@@ -113,7 +120,11 @@ private:
     ColKey m_changeset_original_changeset_size;
     ColKey m_changeset_data;
 
-    bool m_has_pending = false;
+    // Cached values for the current stored bootstrap
+    bool m_has_pending = false;   // Stored bootstrap is complete or still has changesets
+                                  // to be processed
+    int64_t m_query_version = 0;  // Query version of bootstrap in progress
+    int64_t m_remote_version = 0; // Remote version of bootstrap in progress
 };
 
 } // namespace realm::sync
