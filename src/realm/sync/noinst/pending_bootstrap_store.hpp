@@ -51,8 +51,11 @@ public:
     PendingBootstrapStore(const PendingBootstrapStore&) = delete;
     PendingBootstrapStore& operator=(const PendingBootstrapStore&) = delete;
 
-    // True if there are pending changesets to process.
+    // True if the current bootstrap entry has received at least one bootstrap message
     bool has_pending();
+
+    // True if a complete bootstrap entry (i.e. progress has been set) for the current bootstrap entry
+    bool bootstrap_complete();
 
     struct PendingBatch {
         int64_t query_version = 0;
@@ -73,6 +76,7 @@ public:
     struct PendingBatchStats {
         int64_t query_version = 0;
         int64_t remote_version = 0;
+        bool complete = false;
         size_t pending_changesets = 0;
         size_t pending_changeset_bytes = 0;
     };
@@ -87,7 +91,6 @@ public:
                    const std::vector<RemoteChangeset>& changesets, bool* created_new_batch);
 
     void clear();
-
 
 private:
     void reset_state();
@@ -121,8 +124,8 @@ private:
     ColKey m_changeset_data;
 
     // Cached values for the current stored bootstrap
-    bool m_has_pending = false;   // Stored bootstrap is complete or still has changesets
-                                  // to be processed
+    bool m_has_pending = false;   // Stored bootstrap entry is in progress
+    bool m_is_complete = false;   // Stored bootstrap entry received all data
     int64_t m_query_version = 0;  // Query version of bootstrap in progress
     int64_t m_remote_version = 0; // Remote version of bootstrap in progress
 };

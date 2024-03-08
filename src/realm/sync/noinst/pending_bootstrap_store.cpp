@@ -118,10 +118,15 @@ PendingBootstrapStore::PendingBootstrapStore(DBRef db, util::Logger& logger)
 
         if (!bootstrap_obj.is_null(m_progress_col) && !changeset_list.is_empty()) {
             m_has_pending = true;
+            m_is_complete = true;
             m_query_version = bootstrap_obj.get<int64_t>(m_query_version_col);
             // All changesets should have the same remote_version value
             auto cur_changeset = changeset_list.get_object(0);
             m_remote_version = cur_changeset.get<int64_t>(m_changeset_remote_version);
+        }
+        else {
+            // If the object is not complete, then clear the bootstrap store to remove stale bootstraps
+            clear();
         }
     }
 }
@@ -131,12 +136,6 @@ bool PendingBootstrapStore::add_batch(int64_t query_version, int64_t remote_vers
                                       const _impl::ClientProtocol::ReceivedChangesets& changesets,
                                       bool* created_new_batch_out)
 {
-    // There should always be at least one changeset, but bail out of both the list if the list is empty, then just
-    // bail out now, unless progress is not empty.
-    if (!progress && changesets.empty()) {
-        return false;
-    }
-
     std::vector<util::AppendBuffer<char>> compressed_changesets;
     if (!changesets.empty()) {
         compressed_changesets.reserve(changesets.size());
@@ -145,6 +144,8 @@ bool PendingBootstrapStore::add_batch(int64_t query_version, int64_t remote_vers
         util::compression::CompressMemoryArena arena;
         for (auto& changeset : changesets) {
             if (static_cast<int64_t>(changeset.remote_version) != remote_version) {
+                m_logger.info(util::LogCategory::changeset,
+                              "Not a bootstrap message: not all changesets have the same remote version");
                 return false;
             }
             compressed_changesets.emplace_back();
@@ -158,8 +159,9 @@ bool PendingBootstrapStore::add_batch(int64_t query_version, int64_t remote_vers
     // Delete any stale or incomplete bootstrap entries
     auto incomplete_bootstraps = Query(bootstrap_table).not_equal(m_query_version_col, query_version).find_all();
     incomplete_bootstraps.for_each([&](Obj obj) {
-        m_logger.debug(util::LogCategory::changeset, "Clearing incomplete bootstrap for query version %1",
-                       obj.get<int64_t>(m_query_version_col));
+        bool incomplete = obj.is_null(m_progress_col);
+        m_logger.debug(util::LogCategory::changeset, "Clearing old %1 bootstrap for query version %2",
+                       incomplete ? "incomplete" : "complete", obj.get<int64_t>(m_query_version_col));
         return IteratorControl::AdvanceToNext;
     });
     incomplete_bootstraps.clear();
@@ -174,28 +176,36 @@ bool PendingBootstrapStore::add_batch(int64_t query_version, int64_t remote_vers
         m_remote_version = remote_version;
         m_query_version = query_version;
     }
+    // If the bootstrap entry exists for this query_version, but is empty,
+    // then just update the remote_version; no need to create a new entry
+    else if (bootstrap_obj.is_null(m_progress_col) && changeset_list.is_empty()) {
+        m_remote_version = remote_version;
+    }
     else {
-        auto changeset = changeset_list.get_object(0);
         // If the progress object has already been populated, then the previous bootstrap entry
         // was completely downloaded and future adds are not allowed, start over with a new entry
         // Also, if a table entry already exists for this query_version, but the remote_version
-        // does not match, delete the current entry and create a new one.
-        if (!bootstrap_obj.is_null(m_progress_col) ||
-            remote_version != changeset.get<int64_t>(m_changeset_remote_version)) {
-            // If it doesn't create a new bootstrap entry for this query & remote versions
+        // does not match, start over with a new entry.
+        if (bool incomplete = bootstrap_obj.is_null(m_progress_col);
+            !incomplete || remote_version != m_remote_version) {
+            auto log_level = incomplete ? util::Logger::Level::debug : util::Logger::Level::error;
+            m_logger.log(util::LogCategory::changeset, log_level,
+                         "Clearing old %1 bootstrap entry for version: query %2 / remote %3",
+                         incomplete ? "incomplete" : "complete", m_query_version, m_remote_version);
             bootstrap_obj.remove();
+            reset_state();
             bootstrap_obj = bootstrap_table->create_object_with_primary_key(Mixed{query_version}, &did_create);
             REALM_ASSERT_EX(did_create, "Pending Bootstrap entry creation failed");
-            reset_state();
             changeset_list = bootstrap_obj.get_linklist(m_changesets_col);
             m_remote_version = remote_version;
             m_query_version = query_version;
         }
     }
 
-    // At this the provided versions should match the cached versions
+    // At this point the provided versions should match the cached versions
     REALM_ASSERT_3(remote_version, ==, m_remote_version);
     REALM_ASSERT_3(query_version, ==, m_query_version);
+    m_has_pending = true; // Bootstrap entry is in progress
 
     // If a progress object is provided (i.e. this is the last bootstrap message), then save it
     if (progress) {
@@ -209,9 +219,10 @@ bool PendingBootstrapStore::add_batch(int64_t query_version, int64_t remote_vers
         progress_obj.set(m_progress_upload_server_version, int64_t(progress->upload.last_integrated_server_version));
         progress_obj.set(m_progress_upload_client_version, int64_t(progress->upload.client_version));
         // bootstrap is finalized
-        m_has_pending = true;
+        m_is_complete = true;
     }
 
+    // Add the compressed changeset data to the bootstrap entry.
     for (size_t idx = 0; idx < changesets.size(); ++idx) {
         auto cur_changeset = changeset_list.create_and_insert_linked_object(changeset_list.size());
         cur_changeset.set(m_changeset_remote_version, int64_t(changesets[idx].remote_version));
@@ -256,6 +267,11 @@ bool PendingBootstrapStore::has_pending()
     return m_has_pending;
 }
 
+bool PendingBootstrapStore::bootstrap_complete()
+{
+    return m_is_complete;
+}
+
 std::optional<int64_t> PendingBootstrapStore::remote_version()
 {
     if (m_remote_version == 0) {
@@ -280,8 +296,9 @@ void PendingBootstrapStore::clear()
 {
     auto tr = m_db->start_read();
     auto bootstrap_table = tr->get_table(m_table);
-    // Nothing to do if already cleared
+    // Just make sure the state is reset if the bootstrap table is empty
     if (bootstrap_table->is_empty()) {
+        reset_state();
         return;
     }
     tr->promote_to_write();
@@ -295,6 +312,8 @@ PendingBootstrapStore::PendingBatch PendingBootstrapStore::peek_pending(size_t l
     auto tr = m_db->start_read();
     auto bootstrap_table = tr->get_table(m_table);
     if (bootstrap_table->is_empty()) {
+        REALM_ASSERT(!m_has_pending);
+        REALM_ASSERT(!m_is_complete);
         return {};
     }
 
@@ -306,8 +325,10 @@ PendingBootstrapStore::PendingBatch PendingBootstrapStore::peek_pending(size_t l
     REALM_ASSERT_3(query_version, ==, m_query_version);
     PendingBatch ret;
     ret.query_version = query_version;
+    ret.remote_version = m_remote_version;
 
     if (!bootstrap_obj.is_null(m_progress_col)) {
+        REALM_ASSERT(m_is_complete);
         auto progress_obj = bootstrap_obj.get_linked_object(m_progress_col);
         SyncProgress progress;
         progress.latest_server_version.version = progress_obj.get<int64_t>(m_progress_latest_server_version);
@@ -340,7 +361,6 @@ PendingBootstrapStore::PendingBatch PendingBootstrapStore::peek_pending(size_t l
         }
         REALM_ASSERT_3(ec, ==, std::error_code{});
 
-        ret.remote_version = remote_version;
         RemoteChangeset parsed_changeset;
         parsed_changeset.original_changeset_size =
             static_cast<size_t>(cur_changeset.get<int64_t>(m_changeset_original_changeset_size));
@@ -376,14 +396,25 @@ PendingBootstrapStore::PendingBatchStats PendingBootstrapStore::pending_stats()
     PendingBatchStats stats;
     stats.query_version = query_version;
     stats.pending_changesets = changeset_list.size();
-    changeset_list.for_each([&](Obj& cur_changeset) {
-        auto remote_version = cur_changeset.get<int64_t>(m_changeset_remote_version);
-        REALM_ASSERT_3(remote_version, ==, m_remote_version);
-        stats.remote_version = remote_version;
-        stats.pending_changeset_bytes +=
-            static_cast<size_t>(cur_changeset.get<int64_t>(m_changeset_original_changeset_size));
-        return IteratorControl::AdvanceToNext;
-    });
+
+    if (!bootstrap_obj.is_null(m_progress_col)) {
+        REALM_ASSERT(m_is_complete);
+        stats.complete = true;
+    }
+
+    if (changeset_list.is_empty()) {
+        stats.remote_version = m_remote_version;
+    }
+    else {
+        changeset_list.for_each([&](Obj& cur_changeset) {
+            auto remote_version = cur_changeset.get<int64_t>(m_changeset_remote_version);
+            REALM_ASSERT_3(remote_version, ==, m_remote_version);
+            stats.remote_version = remote_version;
+            stats.pending_changeset_bytes +=
+                static_cast<size_t>(cur_changeset.get<int64_t>(m_changeset_original_changeset_size));
+            return IteratorControl::AdvanceToNext;
+        });
+    }
 
     return stats;
 }
@@ -417,23 +448,20 @@ void PendingBootstrapStore::pop_front_pending(const TransactionRef& tr, size_t c
                        "Removing pending bootstrap obj for version: query %1 / remote %2", m_query_version,
                        m_remote_version);
         bootstrap_obj.remove();
+        reset_state();
     }
     else {
-        m_logger.debug(
-            util::LogCategory::changeset,
-            "Removing pending bootstrap batch (%1) of for version: query %2 / remote %3. %4 changeset(s) remaining",
-            count, m_query_version, m_remote_version, changeset_list.size());
-    }
-
-    // If the table is empty, then clear the pending state
-    if (bootstrap_table->is_empty()) {
-        reset_state();
+        m_logger.debug(util::LogCategory::changeset,
+                       "Removed %1 changesets from pending bootstrap for version: query %2 / remote %3. %4 "
+                       "changeset(s) remaining",
+                       count, m_query_version, m_remote_version, changeset_list.size());
     }
 }
 
 void PendingBootstrapStore::reset_state()
 {
     m_has_pending = false;
+    m_is_complete = false;
     m_query_version = 0;
     m_remote_version = 0;
 }
