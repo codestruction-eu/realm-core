@@ -27,11 +27,6 @@ void verify_store_state(test_util::unit_test::TestContext& test_context, sync::P
                         bool pending, int count = 0, int64_t query_version = 0, int64_t remote_version = 0,
                         bool complete = false)
 {
-    // Can't have a query_version of 0 if pending
-    REALM_ASSERT(pending && query_version > 0);
-    // Can't have a remote_version of 0 if pending, not complete, and count > 0
-    REALM_ASSERT(pending && !complete && count > 0 && remote_version > 0);
-
     CHECK_EQUAL(store.has_pending(), pending);
     if (pending) {
         CHECK(store.query_version());
@@ -53,20 +48,18 @@ void verify_store_state(test_util::unit_test::TestContext& test_context, sync::P
 }
 
 void validate_changesets(test_util::unit_test::TestContext& test_context, std::vector<RemoteChangeset> changesets,
-                         int64_t remote_version, int count, int start = 0)
+                         version_type remote_version, int count, int start)
 {
-    version_type remote_version = static_cast<version_type>(remote_version);
-    version_type last_integrated = 5;
-    timestamp_type timestamp = 1;
+    version_type last_integrated = 5 + start;
+    timestamp_type timestamp = 1 + start;
     file_ident_type file_ident = 1;
-    char val = 'a';
-    CHECK(count + start < changesets.size());
-    for (int idx = start; idx < (count + start); idx++) {
+    char val = 'a' + start;
+    for (int idx = 0; idx < count; idx++) {
         auto& changeset = changesets[idx];
-        CHECK_EQUAL(changeset.remote_version, remote_version + idx);
+        CHECK_EQUAL(changeset.remote_version, remote_version);
         CHECK_EQUAL(changeset.last_integrated_local_version, last_integrated + idx);
         CHECK_EQUAL(changeset.origin_timestamp, timestamp + idx);
-        CHECK_EQUAL(changeset.origin_file_ident, 1 + (idx / 3));
+        CHECK_EQUAL(changeset.origin_file_ident, file_ident + ((idx + start) / 3));
         CHECK_EQUAL(changeset.original_changeset_size, 1024);
         util::Span<const char> data(changeset.data.get_first_chunk().data(), changeset.data.get_first_chunk().size());
         CHECK(std::all_of(data.begin(), data.end(), [&](char ch) {
