@@ -198,11 +198,6 @@ public:
         return m_db_path;
     }
 
-    const char* get_encryption_key() const noexcept
-    {
-        return m_alloc.m_file.get_encryption_key();
-    }
-
 #ifdef REALM_DEBUG
     /// Deprecated method, only called from a unit test
     ///
@@ -335,7 +330,7 @@ public:
     bool compact(bool bump_version_number = false, util::Optional<const char*> output_encryption_key = util::none)
         REQUIRES(!m_mutex);
 
-    void write_copy(StringData path, const char* output_encryption_key) REQUIRES(!m_mutex);
+    void write_copy(std::string_view path, const char* output_encryption_key) REQUIRES(!m_mutex);
 
 #ifdef REALM_DEBUG
     void test_ringbuf();

@@ -23,6 +23,7 @@
 #include <ostream>
 #include <sstream>
 
+#include <realm/util/encrypted_file_mapping.hpp>
 #include <realm/util/file.hpp>
 #include <realm/util/file_mapper.hpp>
 
@@ -113,7 +114,7 @@ TEST(File_Streambuf)
     {
         File f(path, File::mode_Read);
         char buffer[256];
-        size_t n = f.read(buffer);
+        size_t n = f.read(0, buffer);
         std::string s_1(buffer, buffer + n);
         std::ostringstream out;
         out << "Line " << 1 << std::endl;
@@ -179,7 +180,41 @@ TEST(File_MapMultiplePages)
     }
 }
 
-TEST(File_ReaderAndWriter)
+TEST(File_ReaderAndWriter_SingleFile)
+{
+    const size_t count = 4096 / sizeof(size_t) * 256 * 2;
+
+    TEST_PATH(path);
+
+    File file(path, File::mode_Write);
+    file.set_encryption_key(crypt_key());
+    file.resize(count * sizeof(size_t));
+
+    File::Map<size_t> write(file, File::access_ReadWrite, count * sizeof(size_t));
+    File::Map<size_t> read(file, File::access_ReadOnly, count * sizeof(size_t));
+
+    for (size_t i = 0; i < count; i += 100) {
+        realm::util::encryption_read_barrier(write, i, 1);
+        write.get_addr()[i] = i;
+        realm::util::encryption_write_barrier(write, i);
+        realm::util::encryption_read_barrier(read, i);
+        if (!CHECK_EQUAL(read.get_addr()[i], i))
+            return;
+    }
+}
+
+#if REALM_ENABLE_ENCRYPTION
+
+namespace {
+struct DummyObserver : WriteObserver {
+    bool no_concurrent_writer_seen() override
+    {
+        return false;
+    }
+};
+} // namespace
+
+TEST(File_ReaderAndWriter_MulitpleFiles)
 {
     const size_t count = 4096 / sizeof(size_t) * 256 * 2;
 
@@ -193,16 +228,19 @@ TEST(File_ReaderAndWriter)
     reader.set_encryption_key(crypt_key());
     CHECK_EQUAL(writer.get_size(), reader.get_size());
 
+    DummyObserver observer;
     File::Map<size_t> write(writer, File::access_ReadWrite, count * sizeof(size_t));
     File::Map<size_t> read(reader, File::access_ReadOnly, count * sizeof(size_t));
+    read.get_encrypted_mapping()->set_observer(&observer);
 
     for (size_t i = 0; i < count; i += 100) {
         realm::util::encryption_read_barrier(write, i, 1);
         write.get_addr()[i] = i;
         realm::util::encryption_write_barrier(write, i);
+        write.flush();
+        read.get_encrypted_mapping()->mark_pages_for_iv_check();
         realm::util::encryption_read_barrier(read, i);
-        CHECK_EQUAL(read.get_addr()[i], i);
-        if (read.get_addr()[i] != i)
+        if (!CHECK_EQUAL(read.get_addr()[i], i))
             return;
     }
 }
@@ -244,8 +282,7 @@ TEST(File_Offset)
     }
 }
 
-
-TEST(File_MultipleWriters)
+TEST(File_MultipleWriters_SingleFile)
 {
     const size_t count = 4096 / sizeof(size_t) * 256 * 2;
 #if defined(_WIN32) && defined(REALM_ENABLE_ENCRYPTION)
@@ -257,16 +294,11 @@ TEST(File_MultipleWriters)
     TEST_PATH(path);
 
     {
-        File w1(path, File::mode_Write);
-        w1.set_encryption_key(crypt_key());
-        w1.resize(count * sizeof(size_t));
-
-        File w2(path, File::mode_Write);
-        w2.set_encryption_key(crypt_key());
-        w2.resize(count * sizeof(size_t));
-
-        File::Map<size_t> map1(w1, File::access_ReadWrite, count * sizeof(size_t));
-        File::Map<size_t> map2(w2, File::access_ReadWrite, count * sizeof(size_t));
+        File w(path, File::mode_Write);
+        w.set_encryption_key(crypt_key());
+        w.resize(count * sizeof(size_t));
+        File::Map<size_t> map1(w, File::access_ReadWrite, count * sizeof(size_t));
+        File::Map<size_t> map2(w, File::access_ReadWrite, count * sizeof(size_t));
 
         // Place zeroes in selected places
         for (size_t i = 0; i < count; i += increments) {
@@ -291,11 +323,71 @@ TEST(File_MultipleWriters)
     File::Map<size_t> read(reader, File::access_ReadOnly, count * sizeof(size_t));
     realm::util::encryption_read_barrier(read, 0, count);
     for (size_t i = 0; i < count; i += increments) {
-        CHECK_EQUAL(read.get_addr()[i], 2);
-        if (read.get_addr()[i] != 2)
+        if (!CHECK_EQUAL(read.get_addr()[i], 2))
             return;
     }
 }
+
+TEST(File_MultipleWriters_MultipleFiles)
+{
+    const size_t count = 4096 / sizeof(size_t) * 256 * 2;
+#if defined(_WIN32) && defined(REALM_ENABLE_ENCRYPTION)
+    // This test runs really slow on Windows with encryption
+    const size_t increments = 3000;
+#else
+    const size_t increments = 100;
+#endif
+    TEST_PATH(path);
+
+    {
+        DummyObserver observer;
+        File w1(path, File::mode_Write);
+        w1.set_encryption_key(crypt_key());
+        w1.resize(count * sizeof(size_t));
+
+        File w2(path, File::mode_Write);
+        w2.set_encryption_key(crypt_key());
+        w2.resize(count * sizeof(size_t));
+
+        File::Map<size_t> map1(w1, File::access_ReadWrite, count * sizeof(size_t));
+        File::Map<size_t> map2(w2, File::access_ReadWrite, count * sizeof(size_t));
+        map1.get_encrypted_mapping()->set_observer(&observer);
+        map2.get_encrypted_mapping()->set_observer(&observer);
+
+        // Place zeroes in selected places
+        for (size_t i = 0; i < count; i += increments) {
+            realm::util::encryption_read_barrier(map1, i);
+            map1.get_addr()[i] = 0;
+            realm::util::encryption_write_barrier(map1, i);
+        }
+        map1.flush();
+
+        for (size_t i = 0; i < count; i += increments) {
+            realm::util::encryption_read_barrier(map1, i, 1);
+            ++map1.get_addr()[i];
+            realm::util::encryption_write_barrier(map1, i);
+            map1.flush();
+            map2.get_encrypted_mapping()->mark_pages_for_iv_check();
+            realm::util::encryption_read_barrier(map2, i, 1);
+            ++map2.get_addr()[i];
+            realm::util::encryption_write_barrier(map2, i);
+            map2.flush();
+            map1.get_encrypted_mapping()->mark_pages_for_iv_check();
+        }
+    }
+
+    File reader(path, File::mode_Read);
+    reader.set_encryption_key(crypt_key());
+
+    File::Map<size_t> read(reader, File::access_ReadOnly, count * sizeof(size_t));
+    realm::util::encryption_read_barrier(read, 0, count);
+    for (size_t i = 0; i < count; i += increments) {
+        if (!CHECK_EQUAL(read.get_addr()[i], 2))
+            return;
+    }
+}
+
+#endif
 
 
 TEST(File_SetEncryptionKey)
@@ -320,11 +412,10 @@ TEST(File_ReadWrite)
     f.resize(100);
 
     for (char i = 0; i < 100; ++i)
-        f.write(&i, 1);
-    f.seek(0);
+        f.write(i, &i, 1);
     for (char i = 0; i < 100; ++i) {
         char read;
-        f.read(&read, 1);
+        f.read(i, &read, 1);
         CHECK_EQUAL(i, read);
     }
 }
@@ -483,29 +574,28 @@ TEST(File_PreallocResizingAPFSBug)
     TEST_PATH(path);
     File file(path, File::mode_Write);
     CHECK(file.is_attached());
-    file.write("aaaaaaaaaaaaaaaaaaaa"); // 20 a's
+    file.write(0, "aaaaaaaaaaaaaaaaaaaa"); // 20 a's
     // calling prealloc on a newly created file would sometimes fail on APFS with EINVAL via fcntl(F_PREALLOCATE)
     // this may not be the only way to trigger the error, but it does seem to be timing dependant.
     file.prealloc(100);
     CHECK_EQUAL(file.get_size(), 100);
 
     // let's write past the first prealloc block (@ 4096) and verify it reads correctly too.
-    file.write("aaaaa");
+    // FIXME: what is this write trying to do?
+    file.write(20, "aaaaa");
     // this will change the file size, but likely won't preallocate more space since the first call to prealloc
     // will probably have allocated a whole 4096 block.
     file.prealloc(200);
     CHECK_EQUAL(file.get_size(), 200);
-    file.write("aa");
+    file.write(22, "aa");
     file.prealloc(5020); // expands to another 4096 block
     constexpr size_t insert_pos = 5000;
     const char* insert_str = "hello";
-    file.seek(insert_pos);
-    file.write(insert_str);
-    file.seek(insert_pos);
+    file.write(insert_pos, insert_str);
     CHECK_EQUAL(file.get_size(), 5020);
     constexpr size_t input_size = 6;
     char input[input_size];
-    file.read(input, input_size);
+    file.read(insert_pos, input, input_size);
     CHECK_EQUAL(strncmp(input, insert_str, input_size), 0);
 }
 
@@ -528,84 +618,6 @@ TEST(File_parent_dir)
         if (actual != expected) {
             realm::util::format(std::cout, "unexpected result '%1' for input '%2'", actual, input);
         }
-    }
-}
-
-TEST(File_GetUniqueID)
-{
-    TEST_PATH(path_1);
-    TEST_PATH(path_2);
-    TEST_PATH(path_3);
-
-    File file1_1;
-    File file1_2;
-    File file2_1;
-    file1_1.open(path_1, File::mode_Write);
-    file1_2.open(path_1, File::mode_Read);
-    file2_1.open(path_2, File::mode_Write);
-
-    // exFAT does not allocate inode numbers until the file is first non-empty
-    file1_1.resize(1);
-    file2_1.resize(1);
-
-    File::UniqueID uid1_1 = file1_1.get_unique_id();
-    File::UniqueID uid1_2 = file1_2.get_unique_id();
-    File::UniqueID uid2_1 = file2_1.get_unique_id();
-    std::optional<File::UniqueID> uid2_2;
-    CHECK(uid2_2 = File::get_unique_id(path_2));
-
-    CHECK(uid1_1 == uid1_2);
-    CHECK(uid2_1 == *uid2_2);
-    CHECK(uid1_1 != uid2_1);
-
-    // Path doesn't exist
-    CHECK_NOT(File::get_unique_id(path_3));
-
-    // Test operator<
-    File::UniqueID uid4_1{0, 5};
-    File::UniqueID uid4_2{1, 42};
-    CHECK(uid4_1 < uid4_2);
-    CHECK_NOT(uid4_2 < uid4_1);
-
-    uid4_1 = {0, 1};
-    uid4_2 = {0, 2};
-    CHECK(uid4_1 < uid4_2);
-    CHECK_NOT(uid4_2 < uid4_1);
-
-    uid4_1 = uid4_2;
-    CHECK_NOT(uid4_1 < uid4_2);
-    CHECK_NOT(uid4_2 < uid4_1);
-
-    file1_1.resize(0);
-    file2_1.resize(0);
-    file2_1.resize(1);
-    file1_1.resize(1);
-    bool running_on_buggy_exfat = test_util::test_dir_is_exfat();
-#if TARGET_OS_MAC
-    if (__builtin_available(macOS 14, *)) {
-        running_on_buggy_exfat = false;
-    }
-#endif
-
-    if (!running_on_buggy_exfat) {
-        CHECK(uid1_1 == file1_1.get_unique_id());
-        CHECK(uid2_1 == file2_1.get_unique_id());
-    }
-    else {
-        std::string message = "The unique id of this Realm file has changed unexpectedly, this could be due to "
-                              "modifications by an external process";
-        std::string expected_1 = util::format("%1 '%2'", message, file1_1.get_path());
-        std::string expected_2 = util::format("%1 '%2'", message, file2_1.get_path());
-        // fat32/exfat could reuse or reassign uid after truncate
-        // there is not much to guarantee about the values of uids
-        // Our File class should detect this situation and throw an error.
-        // Once a Realm has been opened it should never be truncated to 0 so this is not expected
-        // to ever be thrown in normal Realm usage.
-        // One example of where this has caused problems is that the encryption layer stores
-        // encrypted mappings by a file's unique id. If the ids are not actually unique, then
-        // writes from one Realm may get placed into another Realm's mapping.
-        CHECK_THROW_EX(file1_1.get_unique_id(), FileAccessError, e.what() == expected_1);
-        CHECK_THROW_EX(file2_1.get_unique_id(), FileAccessError, e.what() == expected_2);
     }
 }
 

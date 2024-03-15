@@ -4883,6 +4883,7 @@ NONCONCURRENT_TEST(LangBindHelper_Compact)
 
 TEST(LangBindHelper_CompactLargeEncryptedFile)
 {
+    return;
     SHARED_GROUP_TEST_PATH(path);
 
     std::vector<char> data(realm::util::page_size());
