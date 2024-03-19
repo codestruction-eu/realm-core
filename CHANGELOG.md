@@ -7,6 +7,7 @@
 * Introduce the new `SyncUser` interface which can be implemented by SDKs to use sync without the core App Services implementation (or just for greater control over user behavior in tests). ([PR #7300](https://github.com/realm/realm-core/pull/7300)).
 * Improve perfomance of "chained OR equality" queries for UUID/ObjectId types and RQL parsed "IN" queries on string/int/uuid/objectid types. ([.Net #3566](https://github.com/realm/realm-dotnet/issues/3566), since the introduction of these types)
 * Introducing `Query::in()` which allows SDKs to take advantage of improved performance when building equality conditions against many constants. ([#7582](https://github.com/realm/realm-core/pull/7582))
+* "Next launch" metadata file actions are now performed in a multi-process safe manner ([#7576](https://github.com/realm/realm-core/pull/7576)).
 
 ### Fixed
 * <How do the end-user experience this issue? what was the impact?> ([#????](https://github.com/realm/realm-core/issues/????), since v?.?.?)
