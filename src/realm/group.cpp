@@ -695,6 +695,9 @@ TableRef Group::add_table_with_primary_key(StringData name, DataType pk_type, St
     if (Replication* repl = *get_repl())
         repl->add_class_with_primary_key(table->get_key(), name, pk_type, pk_name, nullable, table_type);
 
+    // Additional properties is a standard feature
+    table->do_add_additional_prop_column();
+
     return TableRef(table, table->m_alloc.get_instance_version());
 }
 

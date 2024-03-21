@@ -203,6 +203,10 @@ public:
     }
 
     CollectionType get_collection_type(ColKey col_key) const;
+    bool has_additional_props() const
+    {
+        return bool(m_additional_prop_col);
+    }
 
     void remove_column(ColKey col_key);
     void rename_column(ColKey col_key, StringData new_name);
@@ -736,6 +740,7 @@ private:
     Array m_opposite_column;                        // 8th slot in m_top
     std::vector<std::unique_ptr<SearchIndex>> m_index_accessors;
     ColKey m_primary_key_col;
+    ColKey m_additional_prop_col;
     Replication* const* m_repl;
     static Replication* g_dummy_replication;
     bool m_is_frozen = false;
@@ -791,6 +796,7 @@ private:
     ColKey find_backlink_column(ColKey origin_col_key, TableKey origin_table) const;
     ColKey find_or_add_backlink_column(ColKey origin_col_key, TableKey origin_table);
     void do_set_primary_key_column(ColKey col_key);
+    void do_add_additional_prop_column();
     void validate_column_is_unique(ColKey col_key) const;
 
     ObjKey get_next_valid_key();

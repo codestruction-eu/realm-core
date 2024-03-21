@@ -187,16 +187,24 @@ public:
     // default state. If the object does not exist, create a
     // new object and link it. (To Be Implemented)
     Obj clear_linked_object(ColKey col_key);
+
+    Obj& set_additional_prop(StringData prop_name, Mixed value);
     Obj& set_any(ColKey col_key, Mixed value, bool is_default = false);
     Obj& set_any(StringData col_name, Mixed value, bool is_default = false)
     {
-        return set_any(get_column_key(col_name), value, is_default);
+        if (auto ck = get_column_key(col_name)) {
+            return set_any(ck, value, is_default);
+        }
+        return set_additional_prop(col_name, value);
     }
 
     template <typename U>
     Obj& set(StringData col_name, U value, bool is_default = false)
     {
-        return set(get_column_key(col_name), value, is_default);
+        if (auto ck = get_column_key(col_name)) {
+            return set(ck, value, is_default);
+        }
+        return set_additional_prop(col_name, Mixed(value));
     }
 
     Obj& set_null(ColKey col_key, bool is_default = false);

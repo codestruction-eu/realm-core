@@ -1110,7 +1110,8 @@ StablePath Obj::get_stable_path() const noexcept
 void Obj::add_index(Path& path, const CollectionParent::Index& index) const
 {
     if (path.empty()) {
-        path.emplace_back(get_table()->get_column_key(index));
+        auto ck = m_table->get_column_key(index);
+        path.emplace_back(ck);
     }
     else {
         StringData col_name = get_table()->get_column_name(index);
@@ -1227,6 +1228,18 @@ Obj& Obj::set<Mixed>(ColKey col_key, Mixed value, bool is_default)
     if (recurse)
         const_cast<Table*>(m_table.unchecked_ptr())->remove_recursive(state);
 
+    return *this;
+}
+
+Obj& Obj::set_additional_prop(StringData prop_name, Mixed value)
+{
+    if (auto ck = m_table->m_additional_prop_col) {
+        Dictionary dict(*this, ck);
+        dict.insert(prop_name, value);
+    }
+    else {
+        throw InvalidArgument(ErrorCodes::InvalidProperty, util::format("Property not found: %1", prop_name));
+    }
     return *this;
 }
 

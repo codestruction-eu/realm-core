@@ -141,11 +141,12 @@ TEST_CASE("flx: connect to FLX-enabled app", "[sync][flx][baas]") {
     auto bar_obj_id = ObjectId::gen();
     harness.load_initial_data([&](SharedRealm realm) {
         CppContext c(realm);
-        Object::create(c, realm, "TopLevel",
-                       std::any(AnyDict{{"_id", foo_obj_id},
-                                        {"queryable_str_field", "foo"s},
-                                        {"queryable_int_field", static_cast<int64_t>(5)},
-                                        {"non_queryable_field", "non queryable 1"s}}));
+        auto o = Object::create(c, realm, "TopLevel",
+                                std::any(AnyDict{{"_id", foo_obj_id},
+                                                 {"queryable_str_field", "foo"s},
+                                                 {"queryable_int_field", static_cast<int64_t>(5)},
+                                                 {"non_queryable_field", "non queryable 1"s}}));
+        o.get_obj().set("age", 10);
         Object::create(c, realm, "TopLevel",
                        std::any(AnyDict{{"_id", bar_obj_id},
                                         {"queryable_str_field", "bar"s},
