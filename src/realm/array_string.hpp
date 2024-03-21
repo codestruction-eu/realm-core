@@ -70,9 +70,9 @@ public:
     {
         return true;
     }
-    void set_string_interner(StringInterner& string_interner) const override
+    void set_string_interner(StringInterner* string_interner) const override
     {
-        m_string_interner = &string_interner;
+        m_string_interner = string_interner;
     }
 
     void update_parent()

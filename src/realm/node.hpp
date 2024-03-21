@@ -360,7 +360,7 @@ public:
     {
         return false;
     }
-    virtual void set_string_interner(StringInterner&) const {}
+    virtual void set_string_interner(StringInterner*) const {}
 };
 
 } // namespace realm

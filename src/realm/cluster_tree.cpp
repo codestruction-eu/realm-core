@@ -939,6 +939,7 @@ void ClusterTree::clear(CascadeState& state)
 
 void ClusterTree::enumerate_string_column(ColKey col_key)
 {
+    REALM_ASSERT(false);
     Allocator& alloc = get_alloc();
 
     ArrayString keys(alloc);
