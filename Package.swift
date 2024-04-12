@@ -3,7 +3,7 @@
 import PackageDescription
 import Foundation
 
-let versionStr = "14.4.1"
+let versionStr = "14.5.0"
 let versionPieces = versionStr.split(separator: "-")
 let versionCompontents = versionPieces[0].split(separator: ".")
 let versionExtra = versionPieces.count > 1 ? versionPieces[1] : ""
@@ -420,6 +420,9 @@ let package = Package(
                 "swift",
                 "win32",
             ] + syncExcludes + syncServerSources) as [String],
+            resources: [
+                .copy("realm/PrivacyInfo.xcprivacy")
+            ],
             publicHeadersPath: ".",
             cxxSettings: ([
                 .headerSearchPath("external"),
