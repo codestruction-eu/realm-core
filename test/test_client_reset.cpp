@@ -864,7 +864,7 @@ void expect_reset(unit_test::TestContext& test_context, DB& target, DB& fresh, C
     auto fresh_path = fresh.get_path();
     bool did_reset = _impl::client_reset::perform_client_reset(
         *test_context.logger, target, fresh, mode, nullptr, nullptr, {100, 200}, nullptr, [](int64_t) {},
-        allow_recovery);
+        allow_recovery, sync::ProtocolErrorInfo::Action::ClientReset);
     CHECK(did_reset);
 
     // Should have closed and deleted the fresh realm
@@ -893,7 +893,8 @@ void expect_reset(unit_test::TestContext& test_context, DB& target, DB& fresh, C
     auto db_version = target.get_version_of_latest_snapshot();
     auto fresh_path = fresh.get_path();
     bool did_reset = _impl::client_reset::perform_client_reset(
-        *test_context.logger, target, fresh, mode, nullptr, nullptr, {100, 200}, sub_store, [](int64_t) {}, true);
+        *test_context.logger, target, fresh, mode, nullptr, nullptr, {100, 200}, sub_store, [](int64_t) {}, true,
+        sync::ProtocolErrorInfo::Action::ClientReset);
     CHECK(did_reset);
 
     // Should have closed and deleted the fresh realm
@@ -911,6 +912,10 @@ void expect_reset(unit_test::TestContext& test_context, DB& target, DB& fresh, C
     // sync completion to avoid reset cycles
     {
         auto wt = target.start_write();
+        auto pending_reset = _impl::client_reset::has_pending_reset(*wt);
+        CHECK(pending_reset);
+        CHECK(pending_reset->action == sync::ProtocolErrorInfo::Action::ClientReset);
+        CHECK(pending_reset->type == mode);
         _impl::client_reset::remove_pending_client_resets(*wt);
         wt->commit();
     }
@@ -931,6 +936,121 @@ std::pair<DBRef, DBRef> prepare_db(const std::string& path, const std::string& c
     return {db, db_2};
 }
 
+TEST(ClientReset_ConvertResyncMode)
+{
+    CHECK(_impl::client_reset::to_resync_mode(0) == ClientResyncMode::DiscardLocal);
+    CHECK(_impl::client_reset::to_resync_mode(1) == ClientResyncMode::Recover);
+    CHECK_THROW(_impl::client_reset::to_resync_mode(2), _impl::client_reset::ClientResetFailed);
+
+    CHECK(_impl::client_reset::from_resync_mode(ClientResyncMode::Recover) == 1);
+    CHECK(_impl::client_reset::from_resync_mode(ClientResyncMode::RecoverOrDiscard) == 1);
+    CHECK(_impl::client_reset::from_resync_mode(ClientResyncMode::DiscardLocal) == 0);
+    CHECK_THROW(_impl::client_reset::from_resync_mode(ClientResyncMode::Manual),
+                _impl::client_reset::ClientResetFailed);
+}
+
+TEST(ClientReset_ConvertResetAction)
+{
+    CHECK(_impl::client_reset::to_reset_action(1) == sync::ProtocolErrorInfo::Action::MigrateToFLX);
+    CHECK(_impl::client_reset::to_reset_action(2) == sync::ProtocolErrorInfo::Action::RevertToPBS);
+    CHECK(_impl::client_reset::to_reset_action(0) == sync::ProtocolErrorInfo::Action::ClientReset);
+    CHECK(_impl::client_reset::to_reset_action(3) == sync::ProtocolErrorInfo::Action::ClientReset);
+
+    CHECK(_impl::client_reset::from_reset_action(sync::ProtocolErrorInfo::Action::MigrateToFLX) == 1);
+    CHECK(_impl::client_reset::from_reset_action(sync::ProtocolErrorInfo::Action::RevertToPBS) == 2);
+    CHECK(_impl::client_reset::from_reset_action(sync::ProtocolErrorInfo::Action::ClientReset) == 0);
+    CHECK(_impl::client_reset::from_reset_action(sync::ProtocolErrorInfo::Action::MigrateSchema) == 0);
+}
+
+DBRef setup_metadata_table(std::string path, int version, Timestamp ts, int64_t type, int64_t action)
+{
+    DBRef db = DB::create(make_client_replication(), path);
+    auto wt = db->start_write();
+    auto table = wt->add_table_with_primary_key("client_reset_metadata", type_ObjectId, "id");
+    REALM_ASSERT(table);
+    auto version_col = table->add_column(type_Int, "version");
+    auto timestamp_col = table->add_column(type_Timestamp, "event_time");
+    auto type_col = table->add_column(type_Int, "type_of_reset");
+    ColKey action_col;
+    if (version > 1) {
+        action_col = table->add_column(type_Int, "reset_action");
+    }
+    wt->commit_and_continue_writing();
+    auto id = ObjectId::gen();
+    auto obj = table->create_object_with_primary_key(id, {
+                                                             {version_col, static_cast<int64_t>(version)},
+                                                             {timestamp_col, ts},
+                                                             {type_col, type},
+                                                         });
+    if (version > 1) {
+        obj.set(action_col, action);
+    }
+    wt->commit();
+    mark_as_synchronized(*db);
+    return db;
+}
+
+TEST(ClientReset_V1Table)
+{
+    SHARED_GROUP_TEST_PATH(path_v1);
+    auto timestamp = Timestamp(std::chrono::system_clock::now());
+    auto reset_type = _impl::client_reset::from_resync_mode(ClientResyncMode::Recover);
+    DBRef db = setup_metadata_table(path_v1, 1, timestamp, reset_type, 0);
+    auto wt = db->start_read();
+    auto reset = _impl::client_reset::has_pending_reset(*wt);
+    CHECK(reset->time == timestamp);
+    CHECK(reset->type == _impl::client_reset::to_resync_mode(reset_type));
+    CHECK(reset->action == sync::ProtocolErrorInfo::Action::ClientReset);
+}
+
+TEST(ClientReset_TrackReset)
+{
+    SHARED_GROUP_TEST_PATH(test_path);
+    DBRef db = DB::create(make_client_replication(), test_path);
+    {
+        auto wt = db->start_write();
+        _impl::client_reset::track_reset(*wt, ClientResyncMode::DiscardLocal,
+                                         sync::ProtocolErrorInfo::Action::RevertToPBS);
+    }
+    auto wt = db->start_read();
+    auto reset = _impl::client_reset::has_pending_reset(*wt);
+    CHECK(reset->type == ClientResyncMode::DiscardLocal);
+    CHECK(reset->action == sync::ProtocolErrorInfo::Action::RevertToPBS);
+    auto timestamp = Timestamp(std::chrono::system_clock::now());
+    // Verify timestamp is at least close to current time
+    CHECK((reset->time.get_seconds() - timestamp.get_seconds() < 5));
+}
+
+TEST(ClientReset_DifferentAction)
+{
+    SHARED_GROUP_TEST_PATH(test_path);
+    DBRef db = DB::create(make_client_replication(), test_path);
+    {
+        auto wt = db->start_write();
+        _impl::client_reset::track_reset(*wt, ClientResyncMode::DiscardLocal,
+                                         sync::ProtocolErrorInfo::Action::RevertToPBS);
+    }
+    {
+        auto wt = db->start_read();
+        auto reset = _impl::client_reset::has_pending_reset(*wt);
+        CHECK(reset->type == ClientResyncMode::DiscardLocal);
+        CHECK(reset->action == sync::ProtocolErrorInfo::Action::RevertToPBS);
+    }
+    {
+        auto wt = db->start_write();
+        auto mode = _impl::client_reset::reset_precheck_guard(*wt, ClientResyncMode::RecoverOrDiscard, true,
+                                                              sync::ProtocolErrorInfo::Action::MigrateToFLX,
+                                                              *test_context.logger);
+        CHECK(mode == ClientResyncMode::RecoverOrDiscard);
+    }
+    {
+        auto wt = db->start_read();
+        auto reset = _impl::client_reset::has_pending_reset(*wt);
+        CHECK(reset->type == ClientResyncMode::Recover);
+        CHECK(reset->action == sync::ProtocolErrorInfo::Action::MigrateToFLX);
+    }
+}
+
 TEST(ClientReset_UninitializedFile)
 {
     SHARED_GROUP_TEST_PATH(path_1);
@@ -946,7 +1066,7 @@ TEST(ClientReset_UninitializedFile)
     // written to
     bool did_reset = _impl::client_reset::perform_client_reset(
         *test_context.logger, *db_empty, *db_fresh, ClientResyncMode::Recover, nullptr, nullptr, {100, 200}, nullptr,
-        [](int64_t) {}, true);
+        [](int64_t) {}, true, sync::ProtocolErrorInfo::Action::ClientReset);
     CHECK_NOT(did_reset);
 
     // Should still have closed and deleted the fresh realm
@@ -1111,7 +1231,7 @@ TEST(ClientReset_Recover_RecoveryDisabled)
     });
     CHECK_THROW((_impl::client_reset::perform_client_reset(
                     *test_context.logger, *dbs.first, *dbs.second, ClientResyncMode::Recover, nullptr, nullptr,
-                    {100, 200}, nullptr, [](int64_t) {}, false)),
+                    {100, 200}, nullptr, [](int64_t) {}, false, sync::ProtocolErrorInfo::Action::ClientReset)),
                 _impl::client_reset::ClientResetFailed);
     CHECK_NOT(_impl::client_reset::has_pending_reset(*dbs.first->start_read()));
 }

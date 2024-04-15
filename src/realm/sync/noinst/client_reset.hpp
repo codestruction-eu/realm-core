@@ -63,11 +63,20 @@ void transfer_group(const Transaction& tr_src, Transaction& tr_dst, util::Logger
 
 struct PendingReset {
     ClientResyncMode type;
+    sync::ProtocolErrorInfo::Action action;
     Timestamp time;
 };
 void remove_pending_client_resets(Transaction& wt);
 util::Optional<PendingReset> has_pending_reset(const Transaction& wt);
-void track_reset(Transaction& wt, ClientResyncMode mode);
+void track_reset(Transaction& wt, ClientResyncMode mode, sync::ProtocolErrorInfo::Action action);
+
+// Exposed for testing only
+int64_t from_reset_action(sync::ProtocolErrorInfo::Action action);
+sync::ProtocolErrorInfo::Action to_reset_action(int64_t action);
+ClientResyncMode to_resync_mode(int64_t mode);
+int64_t from_resync_mode(ClientResyncMode mode);
+ClientResyncMode reset_precheck_guard(Transaction& wt, ClientResyncMode mode, bool recovery_is_allowed,
+                                      sync::ProtocolErrorInfo::Action action, util::Logger& logger);
 
 // preform_client_reset_diff() takes the Realm performs a client reset on
 // the Realm in 'path_local' given the Realm 'path_fresh' as the source of truth.
@@ -78,6 +87,7 @@ void track_reset(Transaction& wt, ClientResyncMode mode);
 // 'client_file_ident'
 bool perform_client_reset_diff(DB& db, DB& db_remote, sync::SaltedFileIdent client_file_ident, util::Logger& logger,
                                ClientResyncMode mode, bool recovery_is_allowed, sync::SubscriptionStore* sub_store,
+                               sync::ProtocolErrorInfo::Action action,
                                util::FunctionRef<void(int64_t)> on_flx_version_complete);
 
 } // namespace _impl::client_reset

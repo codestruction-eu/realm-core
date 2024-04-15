@@ -61,6 +61,7 @@ class SyncSocketProvider;
 /// bool wait_for_download_complete_or_client_stopped().
 struct ClientReset {
     realm::ClientResyncMode mode;
+    sync::ProtocolErrorInfo::Action server_requests_action;
     DBRef fresh_copy;
     bool recovery_is_allowed = true;
     util::UniqueFunction<VersionID()> notify_before_client_reset;

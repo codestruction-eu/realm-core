@@ -2257,7 +2257,8 @@ bool Session::client_reset_if_needed()
         logger, *get_db(), *client_reset_config->fresh_copy, client_reset_config->mode,
         std::move(client_reset_config->notify_before_client_reset),
         std::move(client_reset_config->notify_after_client_reset), m_client_file_ident, get_flx_subscription_store(),
-        on_flx_version_complete, client_reset_config->recovery_is_allowed);
+        on_flx_version_complete, client_reset_config->recovery_is_allowed,
+        client_reset_config->server_requests_action);
     if (!did_reset) {
         return false;
     }

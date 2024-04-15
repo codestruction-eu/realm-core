@@ -1633,11 +1633,13 @@ TEST_CASE("sync: client reset", "[sync][pbs][client reset][baas]") {
         local_config.sync_config->error_handler = [&](std::shared_ptr<SyncSession>, SyncError error) {
             err = error;
         };
-        auto make_fake_previous_reset = [&local_config](ClientResyncMode type) {
-            local_config.sync_config->notify_before_client_reset = [previous_type = type](SharedRealm realm) {
+        auto make_fake_previous_reset = [&local_config](ClientResyncMode type,
+                                                        sync::ProtocolErrorInfo::Action action =
+                                                            sync::ProtocolErrorInfo::Action::ClientReset) {
+            local_config.sync_config->notify_before_client_reset = [type, action](SharedRealm realm) {
                 auto db = TestHelper::get_db(realm);
                 auto wt = db->start_write();
-                _impl::client_reset::track_reset(*wt, previous_type);
+                _impl::client_reset::track_reset(*wt, type, action);
                 wt->commit();
             };
         };

@@ -821,17 +821,34 @@ void SyncSession::handle_progress_update(uint64_t downloaded, uint64_t downloada
                                upload_estimate);
 }
 
-static sync::Session::Config::ClientReset make_client_reset_config(const RealmConfig& base_config,
-                                                                   const std::shared_ptr<SyncConfig>& sync_config,
-                                                                   DBRef&& fresh_copy, bool recovery_is_allowed,
-                                                                   bool schema_migration_detected)
+static sync::Session::Config::ClientReset
+make_client_reset_config(const RealmConfig& base_config, const std::shared_ptr<SyncConfig>& sync_config,
+                         DBRef&& fresh_copy, sync::ProtocolErrorInfo::Action server_requests_action,
+                         bool schema_migration_detected)
 {
     REALM_ASSERT(sync_config->client_resync_mode != ClientResyncMode::Manual);
 
     sync::Session::Config::ClientReset config;
     config.mode = sync_config->client_resync_mode;
+    config.server_requests_action = [](sync::ProtocolErrorInfo::Action action) {
+        // We only care if it's a sync migration or not...
+        switch (action) {
+            case sync::ProtocolErrorInfo::Action::MigrateToFLX:
+                [[fallthrough]];
+            case sync::ProtocolErrorInfo::Action::RevertToPBS:
+                return action;
+            case sync::ProtocolErrorInfo::Action::ClientReset:
+                [[fallthrough]];
+            default:
+                return sync::ProtocolErrorInfo::Action::ClientReset;
+        }
+    }(server_requests_action);
     config.fresh_copy = std::move(fresh_copy);
-    config.recovery_is_allowed = recovery_is_allowed;
+    // Migrations are allowed to recover local data.
+    config.recovery_is_allowed = server_requests_action == sync::ProtocolErrorInfo::Action::ClientReset ||
+                                 server_requests_action == sync::ProtocolErrorInfo::Action::MigrateToFLX ||
+                                 server_requests_action == sync::ProtocolErrorInfo::Action::RevertToPBS;
+
 
     // The conditions here are asymmetric because if we have *either* a before
     // or after callback we need to make sure to initialize the local schema
@@ -936,14 +953,10 @@ void SyncSession::create_sync_session()
     session_config.custom_http_headers = sync_config.custom_http_headers;
 
     if (m_server_requests_action != sync::ProtocolErrorInfo::Action::NoAction) {
-        // Migrations are allowed to recover local data.
-        const bool allowed_to_recover = m_server_requests_action == sync::ProtocolErrorInfo::Action::ClientReset ||
-                                        m_server_requests_action == sync::ProtocolErrorInfo::Action::MigrateToFLX ||
-                                        m_server_requests_action == sync::ProtocolErrorInfo::Action::RevertToPBS;
         // Use the original sync config, not the updated one from the migration store
         session_config.client_reset_config =
             make_client_reset_config(m_config, m_original_sync_config, std::move(m_client_reset_fresh_copy),
-                                     allowed_to_recover, m_previous_schema_version.has_value());
+                                     m_server_requests_action, m_previous_schema_version.has_value());
         session_config.schema_version = m_previous_schema_version.value_or(m_config.schema_version);
         m_server_requests_action = sync::ProtocolErrorInfo::Action::NoAction;
     }

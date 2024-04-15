@@ -28,6 +28,7 @@
 #include <realm/object-store/sync/mongo_collection.hpp>
 #include <realm/object-store/sync/mongo_database.hpp>
 
+#include <realm/sync/protocol.hpp>
 #include <realm/sync/noinst/client_history_impl.hpp>
 #include <realm/sync/noinst/client_reset.hpp>
 
@@ -427,7 +428,7 @@ struct FakeLocalClientReset : public TestClientReset {
             using _impl::client_reset::perform_client_reset_diff;
             constexpr bool recovery_is_allowed = true;
             perform_client_reset_diff(*local_db, *remote_db, fake_ident, *logger, m_mode, recovery_is_allowed,
-                                      nullptr, [](int64_t) {});
+                                      nullptr, sync::ProtocolErrorInfo::Action::ClientReset, [](int64_t) {});
 
             remote_realm->close();
             if (m_on_post_reset) {

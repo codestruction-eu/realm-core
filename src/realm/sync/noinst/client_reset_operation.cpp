@@ -54,7 +54,8 @@ bool is_fresh_path(const std::string& path)
 bool perform_client_reset(util::Logger& logger, DB& db, DB& fresh_db, ClientResyncMode mode,
                           CallbackBeforeType notify_before, CallbackAfterType notify_after,
                           sync::SaltedFileIdent new_file_ident, sync::SubscriptionStore* sub_store,
-                          util::FunctionRef<void(int64_t)> on_flx_version, bool recovery_is_allowed)
+                          util::FunctionRef<void(int64_t)> on_flx_version, bool recovery_is_allowed,
+                          sync::ProtocolErrorInfo::Action server_requests_action)
 {
     REALM_ASSERT(mode != ClientResyncMode::Manual);
     logger.debug(util::LogCategory::reset,
@@ -95,8 +96,9 @@ bool perform_client_reset(util::Logger& logger, DB& db, DB& fresh_db, ClientResy
     if (notify_after) {
         previous_state = db.start_frozen(frozen_before_state_version);
     }
-    bool did_recover = client_reset::perform_client_reset_diff(
-        db, fresh_db, new_file_ident, logger, mode, recovery_is_allowed, sub_store, on_flx_version); // throws
+    bool did_recover =
+        client_reset::perform_client_reset_diff(db, fresh_db, new_file_ident, logger, mode, recovery_is_allowed,
+                                                sub_store, server_requests_action, on_flx_version); // throws
 
     if (notify_after) {
         notify_after(previous_state->get_version_of_current_transaction(), did_recover);
