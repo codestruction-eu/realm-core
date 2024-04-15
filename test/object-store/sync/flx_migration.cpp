@@ -321,8 +321,6 @@ TEST_CASE("Test client migration and rollback", "[sync][flx][flx migration][baas
 TEST_CASE("Test client migration and rollback with recovery", "[sync][flx][flx migration][baas]") {
     auto logger_ptr = util::Logger::get_default_logger();
 
-    enum TestState { initial, cr_start, cr_complete };
-    TestingStateMachine<TestState> state(initial);
     const std::string partition = "migration-test";
     const Schema mig_schema{
         ObjectSchema("Object", {{"_id", PropertyType::ObjectId, Property::IsPrimary{true}},
@@ -332,15 +330,6 @@ TEST_CASE("Test client migration and rollback with recovery", "[sync][flx][flx m
     TestAppSession session(create_app(server_app_config));
     SyncTestFile config(session.app()->current_user(), partition, server_app_config.schema);
     config.sync_config->client_resync_mode = ClientResyncMode::Recover;
-    config.sync_config->notify_before_client_reset = [&](SharedRealm) {
-        REQUIRE(state.get() == TestState::initial);
-        state.transition_to(TestState::cr_start);
-    };
-    config.sync_config->notify_after_client_reset = [&](SharedRealm, ThreadSafeReference, bool did_recover) {
-        REQUIRE(state.get() == TestState::cr_start);
-        REQUIRE(did_recover);
-        state.transition_to(TestState::cr_complete);
-    };
     config.schema_version = 0;
 
     // Fill some objects
@@ -370,12 +359,10 @@ TEST_CASE("Test client migration and rollback with recovery", "[sync][flx][flx m
     }
 
     // Migrate to FLX
-    state.transition_to(TestState::initial); // Reset state machine
     trigger_server_migration(session.app_session(), MigrateToFLX, logger_ptr);
 
     // Resume the session and verify the additional object was uploaded after the migration
     outer_realm->sync_session()->resume();
-    state.wait_for(TestState::cr_complete); // Wait for client reset to complete
     REQUIRE(!wait_for_upload(*outer_realm));
     REQUIRE(!wait_for_download(*outer_realm));
 
@@ -425,12 +412,10 @@ TEST_CASE("Test client migration and rollback with recovery", "[sync][flx][flx m
                                                      {{"_id", obj_id}});
 
     //  Roll back to PBS
-    state.transition_to(TestState::initial); // Reset state machine
     trigger_server_migration(session.app_session(), RollbackToPBS, logger_ptr);
 
     // Connect after rolling back to PBS
     outer_realm->sync_session()->resume();
-    state.wait_for(TestState::cr_complete); // Wait for client reset to complete
     REQUIRE(!wait_for_upload(*outer_realm));
     REQUIRE(!wait_for_download(*outer_realm));
 
@@ -453,11 +438,14 @@ TEST_CASE("Test client migration and rollback with recovery", "[sync][flx][flx m
     }
 
     //  Migrate back to FLX - and keep the realm session open
-    state.transition_to(TestState::initial); // Reset state machine
     trigger_server_migration(session.app_session(), MigrateToFLX, logger_ptr);
 
     // wait for the subscription store to initialize after downloading
-    state.wait_for(TestState::cr_complete); // Wait for client reset to complete
+    timed_wait_for(
+        [&outer_realm]() {
+            return outer_realm->sync_session() && outer_realm->sync_session()->get_flx_subscription_store();
+        },
+        std::chrono::seconds(180));
 
     // Verify data has been sync'ed and there is only 1 subscription for the Object table
     {
@@ -473,10 +461,8 @@ TEST_CASE("Test client migration and rollback with recovery", "[sync][flx][flx m
     }
 
     // Roll back to PBS once again - and keep the realm session open
-    state.transition_to(TestState::initial); // Reset state machine
     trigger_server_migration(session.app_session(), RollbackToPBS, logger_ptr);
 
-    state.wait_for(TestState::cr_complete); // Wait for client reset to complete
     REQUIRE(!wait_for_upload(*outer_realm));
     REQUIRE(!wait_for_download(*outer_realm));
 
