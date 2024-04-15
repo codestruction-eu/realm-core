@@ -12,6 +12,7 @@
 * App::all_users() included logged out users only if they were logged out while the App instance existed. It now always includes all logged out users. ([PR #7300](https://github.com/realm/realm-core/pull/7300)).
 * Deleting the active user left the active user unset rather than selecting another logged-in user as the active user like logging out and removing users did. ([PR #7300](https://github.com/realm/realm-core/pull/7300)).
 * Fix compilation errors when using command-line `swift build` ([#7587](https://github.com/realm/realm-core/pull/7587), since v14.5.1).
+* Fix client reset failure during sync migration due to previous incomplete client reset. ([PR #7542](https://github.com/realm/realm-core/pull/7542), since v13.11.0)
 
 ### Breaking changes
 * The following things have been renamed or moved as part of moving all of the App Services functionality to the app namespace:
