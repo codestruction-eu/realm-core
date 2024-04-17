@@ -862,9 +862,16 @@ void expect_reset(unit_test::TestContext& test_context, DB& target, DB& fresh, C
 {
     auto db_version = target.get_version_of_latest_snapshot();
     auto fresh_path = fresh.get_path();
-    bool did_reset = _impl::client_reset::perform_client_reset(
-        *test_context.logger, target, fresh, mode, nullptr, nullptr, {100, 200}, nullptr, [](int64_t) {},
-        allow_recovery, sync::ProtocolErrorInfo::Action::ClientReset);
+    sync::ClientReset cr_config;
+    cr_config.mode = mode;
+    cr_config.server_requests_action = sync::ProtocolErrorInfo::Action::ClientReset;
+    cr_config.fresh_copy = fresh.shared_from_this();
+    cr_config.recovery_is_allowed = allow_recovery;
+    cr_config.notify_before_client_reset = nullptr;
+    cr_config.notify_after_client_reset = nullptr;
+
+    bool did_reset = _impl::client_reset::perform_client_reset(*test_context.logger, target, std::move(cr_config),
+                                                               {100, 200}, nullptr, [](int64_t) {});
     CHECK(did_reset);
 
     // Should have closed and deleted the fresh realm
@@ -892,9 +899,16 @@ void expect_reset(unit_test::TestContext& test_context, DB& target, DB& fresh, C
 {
     auto db_version = target.get_version_of_latest_snapshot();
     auto fresh_path = fresh.get_path();
-    bool did_reset = _impl::client_reset::perform_client_reset(
-        *test_context.logger, target, fresh, mode, nullptr, nullptr, {100, 200}, sub_store, [](int64_t) {}, true,
-        sync::ProtocolErrorInfo::Action::ClientReset);
+    sync::ClientReset cr_config;
+    cr_config.mode = mode;
+    cr_config.server_requests_action = sync::ProtocolErrorInfo::Action::ClientReset;
+    cr_config.fresh_copy = fresh.shared_from_this();
+    cr_config.recovery_is_allowed = true;
+    cr_config.notify_before_client_reset = nullptr;
+    cr_config.notify_after_client_reset = nullptr;
+
+    bool did_reset = _impl::client_reset::perform_client_reset(*test_context.logger, target, std::move(cr_config),
+                                                               {100, 200}, sub_store, [](int64_t) {});
     CHECK(did_reset);
 
     // Should have closed and deleted the fresh realm
@@ -1062,11 +1076,18 @@ TEST(ClientReset_UninitializedFile)
     });
 
     auto db_empty = DB::create(make_client_replication(), path_3);
+    sync::ClientReset cr_config;
+    cr_config.mode = ClientResyncMode::Recover;
+    cr_config.server_requests_action = sync::ProtocolErrorInfo::Action::ClientReset;
+    cr_config.fresh_copy = db_fresh;
+    cr_config.recovery_is_allowed = true;
+    cr_config.notify_before_client_reset = nullptr;
+    cr_config.notify_after_client_reset = nullptr;
+
     // Should not perform a client reset because the target file has never been
     // written to
-    bool did_reset = _impl::client_reset::perform_client_reset(
-        *test_context.logger, *db_empty, *db_fresh, ClientResyncMode::Recover, nullptr, nullptr, {100, 200}, nullptr,
-        [](int64_t) {}, true, sync::ProtocolErrorInfo::Action::ClientReset);
+    bool did_reset = _impl::client_reset::perform_client_reset(*test_context.logger, *db_empty, std::move(cr_config),
+                                                               {100, 200}, nullptr, [](int64_t) {});
     CHECK_NOT(did_reset);
 
     // Should still have closed and deleted the fresh realm
@@ -1229,9 +1250,16 @@ TEST(ClientReset_Recover_RecoveryDisabled)
     auto dbs = prepare_db(path_1, path_2, [](Transaction& tr) {
         tr.add_table_with_primary_key("class_table", type_Int, "pk");
     });
-    CHECK_THROW((_impl::client_reset::perform_client_reset(
-                    *test_context.logger, *dbs.first, *dbs.second, ClientResyncMode::Recover, nullptr, nullptr,
-                    {100, 200}, nullptr, [](int64_t) {}, false, sync::ProtocolErrorInfo::Action::ClientReset)),
+    sync::ClientReset cr_config;
+    cr_config.mode = ClientResyncMode::Recover;
+    cr_config.server_requests_action = sync::ProtocolErrorInfo::Action::ClientReset;
+    cr_config.fresh_copy = dbs.second;
+    cr_config.recovery_is_allowed = false;
+    cr_config.notify_before_client_reset = nullptr;
+    cr_config.notify_after_client_reset = nullptr;
+
+    CHECK_THROW((_impl::client_reset::perform_client_reset(*test_context.logger, *dbs.first, std::move(cr_config),
+                                                           {100, 200}, nullptr, [](int64_t) {})),
                 _impl::client_reset::ClientResetFailed);
     CHECK_NOT(_impl::client_reset::has_pending_reset(*dbs.first->start_read()));
 }

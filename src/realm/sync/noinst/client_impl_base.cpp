@@ -1709,8 +1709,7 @@ void Session::activate()
     reset_protocol_state();
     m_state = Active;
 
-    call_debug_hook(SyncClientHookEvent::SessionActivating, m_progress, m_last_sent_flx_query_version,
-                    DownloadBatchState::SteadyState, 0);
+    call_debug_hook(SyncClientHookEvent::SessionActivating);
 
     REALM_ASSERT(!m_suspended);
     m_conn.one_more_active_unsuspended_session(); // Throws
@@ -1929,8 +1928,7 @@ void Session::send_bind_message()
     m_conn.initiate_write_message(out, this); // Throws
 
     m_bind_message_sent = true;
-    call_debug_hook(SyncClientHookEvent::BindMessageSent, m_progress, m_last_sent_flx_query_version,
-                    DownloadBatchState::SteadyState, 0);
+    call_debug_hook(SyncClientHookEvent::BindMessageSent);
 
     // Ready to send the IDENT message if the file identifier pair is already
     // available.
@@ -2253,18 +2251,18 @@ bool Session::client_reset_if_needed()
     auto on_flx_version_complete = [this](int64_t version) {
         this->on_flx_sync_version_complete(version);
     };
-    bool did_reset = client_reset::perform_client_reset(
-        logger, *get_db(), *client_reset_config->fresh_copy, client_reset_config->mode,
-        std::move(client_reset_config->notify_before_client_reset),
-        std::move(client_reset_config->notify_after_client_reset), m_client_file_ident, get_flx_subscription_store(),
-        on_flx_version_complete, client_reset_config->recovery_is_allowed,
-        client_reset_config->server_requests_action);
+    call_debug_hook(SyncClientHookEvent::ClientResetMergeStarting);
+    bool did_reset =
+        client_reset::perform_client_reset(logger, *get_db(), std::move(*client_reset_config), m_client_file_ident,
+                                           get_flx_subscription_store(), on_flx_version_complete);
     if (!did_reset) {
+        call_debug_hook(SyncClientHookEvent::ClientResetMergeComplete);
         return false;
     }
 
     // The fresh Realm has been used to reset the state
     logger.debug("Client reset is completed, path=%1", get_realm_path()); // Throws
+    call_debug_hook(SyncClientHookEvent::ClientResetMergeComplete);
 
     SaltedFileIdent client_file_ident;
     bool has_pending_client_reset = false;
@@ -2324,6 +2322,7 @@ Status Session::receive_ident_message(SaltedFileIdent client_file_ident)
     }
 
     m_client_file_ident = client_file_ident;
+    call_debug_hook(SyncClientHookEvent::ClientIdentReceived);
 
     if (REALM_UNLIKELY(get_client().is_dry_run())) {
         // Ready to send the IDENT message
@@ -2340,6 +2339,9 @@ Status Session::receive_ident_message(SaltedFileIdent client_file_ident)
     catch (const std::exception& e) {
         auto err_msg = util::format("A fatal error occurred during client reset: '%1'", e.what());
         logger.error(err_msg.c_str());
+        auto status = Status{ErrorCodes::AutoClientResetFailed, err_msg};
+        ProtocolErrorInfo prot_info = ProtocolErrorInfo(ErrorCodes::AutoClientResetFailed, err_msg, IsFatal{true});
+        call_debug_hook(SyncClientHookEvent::ClientResetMergeFailed, prot_info);
         SessionErrorInfo err_info(Status{ErrorCodes::AutoClientResetFailed, err_msg}, IsFatal{true});
         suspend(err_info);
         return Status::OK();

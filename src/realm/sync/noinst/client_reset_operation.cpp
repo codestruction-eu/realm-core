@@ -51,21 +51,20 @@ bool is_fresh_path(const std::string& path)
     return path.substr(path.size() - suffix_len, suffix_len) == c_fresh_suffix;
 }
 
-bool perform_client_reset(util::Logger& logger, DB& db, DB& fresh_db, ClientResyncMode mode,
-                          CallbackBeforeType notify_before, CallbackAfterType notify_after,
+bool perform_client_reset(util::Logger& logger, DB& db, sync::ClientReset&& reset_config,
                           sync::SaltedFileIdent new_file_ident, sync::SubscriptionStore* sub_store,
-                          util::FunctionRef<void(int64_t)> on_flx_version, bool recovery_is_allowed,
-                          sync::ProtocolErrorInfo::Action server_requests_action)
+                          util::FunctionRef<void(int64_t)> on_flx_version)
 {
-    REALM_ASSERT(mode != ClientResyncMode::Manual);
+    REALM_ASSERT(reset_config.mode != ClientResyncMode::Manual);
+    REALM_ASSERT(reset_config.fresh_copy);
     logger.debug(util::LogCategory::reset,
                  "Possibly beginning client reset operation: realm_path = %1, mode = %2, recovery_allowed = %3",
-                 db.get_path(), mode, recovery_is_allowed);
+                 db.get_path(), reset_config.mode, reset_config.recovery_is_allowed);
 
     auto always_try_clean_up = util::make_scope_exit([&]() noexcept {
-        std::string path_to_clean = fresh_db.get_path();
+        std::string path_to_clean = reset_config.fresh_copy->get_path();
         try {
-            fresh_db.close();
+            reset_config.fresh_copy->close();
             constexpr bool delete_lockfile = true;
             DB::delete_files(path_to_clean, nullptr, delete_lockfile);
         }
@@ -89,19 +88,20 @@ bool perform_client_reset(util::Logger& logger, DB& db, DB& fresh_db, ClientResy
         return false;
     }
 
-    VersionID frozen_before_state_version = notify_before ? notify_before() : latest_version;
+    VersionID frozen_before_state_version =
+        reset_config.notify_before_client_reset ? reset_config.notify_before_client_reset() : latest_version;
 
     // If m_notify_after is set, pin the previous state to keep it around.
     TransactionRef previous_state;
-    if (notify_after) {
+    if (reset_config.notify_after_client_reset) {
         previous_state = db.start_frozen(frozen_before_state_version);
     }
-    bool did_recover =
-        client_reset::perform_client_reset_diff(db, fresh_db, new_file_ident, logger, mode, recovery_is_allowed,
-                                                sub_store, server_requests_action, on_flx_version); // throws
+    bool did_recover = client_reset::perform_client_reset_diff(
+        db, *reset_config.fresh_copy, new_file_ident, logger, reset_config.mode, reset_config.recovery_is_allowed,
+        sub_store, reset_config.server_requests_action, on_flx_version); // throws
 
-    if (notify_after) {
-        notify_after(previous_state->get_version_of_current_transaction(), did_recover);
+    if (reset_config.notify_after_client_reset) {
+        reset_config.notify_after_client_reset(previous_state->get_version_of_current_transaction(), did_recover);
     }
 
     return true;

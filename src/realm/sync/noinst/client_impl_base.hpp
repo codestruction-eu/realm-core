@@ -1192,6 +1192,7 @@ private:
     void check_for_upload_completion();
     void check_for_download_completion();
 
+    SyncClientHookAction call_debug_hook(SyncClientHookEvent event);
     SyncClientHookAction call_debug_hook(SyncClientHookEvent event, const SyncProgress&, int64_t, DownloadBatchState,
                                          size_t);
     SyncClientHookAction call_debug_hook(SyncClientHookEvent event, const ProtocolErrorInfo&);

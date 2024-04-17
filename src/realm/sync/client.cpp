@@ -1062,6 +1062,11 @@ SyncClientHookAction SessionImpl::call_debug_hook(const SyncClientHookData& data
     }
 }
 
+SyncClientHookAction SessionImpl::call_debug_hook(SyncClientHookEvent event)
+{
+    return call_debug_hook(event, m_progress, m_last_sent_flx_query_version, DownloadBatchState::SteadyState, 0);
+}
+
 SyncClientHookAction SessionImpl::call_debug_hook(SyncClientHookEvent event, const SyncProgress& progress,
                                                   int64_t query_version, DownloadBatchState batch_state,
                                                   size_t num_changesets)
@@ -1986,8 +1991,9 @@ void SessionWrapper::handle_pending_client_reset_acknowledgement()
 
     auto pending_reset = _impl::client_reset::has_pending_reset(*m_db->start_frozen());
     REALM_ASSERT(pending_reset);
-    m_sess->logger.info("Tracking pending client reset of type \"%1\" from %2", pending_reset->type,
-                        pending_reset->time);
+    m_sess->logger.info("Tracking pending client reset of type: '%1' for '%2' at: %3", pending_reset->type,
+                        pending_reset->action, pending_reset->time);
+    // Now that the client reset merge is complete, wait for the changes to synchronize with the server
     async_wait_for(true, true, [self = util::bind_ptr(this), pending_reset = *pending_reset](Status status) {
         if (status == ErrorCodes::OperationAborted) {
             return;
