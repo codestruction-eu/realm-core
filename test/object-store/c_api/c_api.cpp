@@ -4187,13 +4187,11 @@ TEST_CASE("C API - properties", "[c_api]") {
         auto results = cptr_checked(realm_object_find_all(realm, class_foo.key));
 
         SECTION("wrong thread") {
-            std::thread t{[&]() {
+            JoiningThread{[&] {
                 realm_value_t val;
                 CHECK(!realm_get_value(foo_obj.get(), foo_int_key, &val));
                 CHECK_ERR(RLM_ERR_WRONG_THREAD);
             }};
-
-            t.join();
         }
 
         SECTION("thread-safe references") {
@@ -4205,8 +4203,9 @@ TEST_CASE("C API - properties", "[c_api]") {
             auto results_tsr = cptr_checked(realm_create_thread_safe_reference(results.get()));
 
             SECTION("resolve") {
-                std::thread t{[&]() {
+                JoiningThread{[&] {
                     auto config = make_config(test_file.path.c_str());
+                    config->scheduler = util::Scheduler::make_dummy();
                     auto realm2 = cptr_checked(realm_open(config.get()));
                     auto foo_obj2 =
                         cptr_checked(realm_object_from_thread_safe_reference(realm2.get(), foo_obj_tsr.get()));
@@ -4227,8 +4226,6 @@ TEST_CASE("C API - properties", "[c_api]") {
                     CHECK(realm_results_count(results2.get(), &count));
                     CHECK(count == 1);
                 }};
-
-                t.join();
             }
 
             SECTION("resolve in frozen") {
@@ -5832,7 +5829,7 @@ TEST_CASE("C API - binding callback thread observer", "[sync][c_api]") {
         REQUIRE(observer_ptr->has_handle_error());
         REQUIRE(observer_ptr->test_get_userdata_ptr() == &bcto_user_data);
 
-        auto test_thread = std::thread([&]() {
+        JoiningThread([&] {
             auto bcto_ptr = std::static_pointer_cast<realm::BindingCallbackThreadObserver>(
                 config->default_socket_provider_thread_observer);
             REQUIRE(bcto_ptr);
@@ -5842,9 +5839,6 @@ TEST_CASE("C API - binding callback thread observer", "[sync][c_api]") {
             bcto_ptr->did_create_thread();
             REQUIRE(bcto_ptr->handle_error(MultipleSyncAgents()));
         });
-
-        // Wait for the thread to exit
-        test_thread.join();
 
         REQUIRE(bcto_user_data.thread_create_called);
         REQUIRE(bcto_user_data.thread_on_error_message.find(
