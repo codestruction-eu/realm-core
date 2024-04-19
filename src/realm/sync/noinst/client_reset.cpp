@@ -69,11 +69,16 @@ namespace realm::_impl::client_reset {
 
 std::string PendingReset::to_string() const
 {
+    // PendingReset structure is empty
+    if (REALM_UNLIKELY(version == 0)) {
+        return "empty client reset structure";
+    }
     // Has only V1 metadata info
-    if (REALM_UNLIKELY(action == Action::NoAction)) {
+    if (REALM_UNLIKELY(version == 1)) {
         return util::format("client reset of type: '%1' at: %2", mode, time);
     }
     // V2 metadata info
+    REALM_ASSERT(version == 2);
     return util::format("%1 client reset of type: '%2' for '%3' at: %4",
                         recovery_allowed ? "recoverable" : "non-recoverable", mode, action, time);
 }
@@ -443,31 +448,31 @@ void remove_pending_client_resets(Transaction& wt)
     }
 }
 
-int64_t from_reset_action(sync::ProtocolErrorInfo::Action action)
+int64_t from_reset_action(PendingReset::Action action)
 {
     switch (action) {
-        case sync::ProtocolErrorInfo::Action::MigrateToFLX:
+        case PendingReset::Action::MigrateToFLX:
             return 1;
-        case sync::ProtocolErrorInfo::Action::RevertToPBS:
+        case PendingReset::Action::RevertToPBS:
             return 2;
-        case sync::ProtocolErrorInfo::Action::ClientReset:
+        case PendingReset::Action::ClientReset:
             [[fallthrough]];
         default:
             return 0;
     }
 }
 
-sync::ProtocolErrorInfo::Action to_reset_action(int64_t action)
+PendingReset::Action to_reset_action(int64_t action)
 {
     switch (action) {
         case 1:
-            return sync::ProtocolErrorInfo::Action::MigrateToFLX;
+            return PendingReset::Action::MigrateToFLX;
         case 2:
-            return sync::ProtocolErrorInfo::Action::RevertToPBS;
+            return PendingReset::Action::RevertToPBS;
         case 0:
             [[fallthrough]];
         default:
-            return sync::ProtocolErrorInfo::Action::ClientReset;
+            return PendingReset::Action::ClientReset;
     }
 }
 
@@ -517,18 +522,18 @@ util::Optional<PendingReset> has_pending_reset(const Transaction& rt)
     REALM_ASSERT(first);
     PendingReset pending;
     REALM_ASSERT(version_col);
-    int64_t version = first.get<int64_t>(version_col);
+    pending.version = static_cast<int>(first.get<int64_t>(version_col));
     // Version 1 columns
     REALM_ASSERT(timestamp_col);
     REALM_ASSERT(mode_col);
     pending.time = first.get<Timestamp>(timestamp_col);
     pending.mode = to_resync_mode(first.get<int64_t>(mode_col));
-    if (version == 0 || version > metadata_version) {
-        throw ClientResetFailed(util::format("Unsupported client reset metadata version: %1 vs %2, from %3", version,
-                                             metadata_version, pending.time));
+    if (pending.version == 0 || pending.version > metadata_version) {
+        throw ClientResetFailed(util::format("Unsupported client reset metadata version: %1 vs %2, from %3",
+                                             pending.version, metadata_version, pending.time));
     }
     // Version 2 columns
-    if (version >= 2) {
+    if (pending.version >= 2) {
         ColKey recovery_col = table->get_column_key(s_reset_recovery_col_name);
         ColKey action_col = table->get_column_key(s_reset_action_col_name);
         ColKey code_col = table->get_column_key(s_reset_error_code_col_name);
@@ -545,9 +550,9 @@ util::Optional<PendingReset> has_pending_reset(const Transaction& rt)
         }
     }
     else {
-        // Provide default action, error and recovery values if table version is 1
+        // Provide default action and recovery values if table version is 1
         pending.recovery_allowed = true;
-        pending.action = sync::ProtocolErrorInfo::Action::ClientReset;
+        pending.action = PendingReset::Action::ClientReset;
     }
     return pending;
 }
@@ -615,7 +620,7 @@ void track_reset(Transaction& wt, ClientResyncMode mode, bool recovery_allowed, 
 }
 
 ClientResyncMode reset_precheck_guard(Transaction& wt, ClientResyncMode mode, bool recovery_allowed,
-                                      sync::ProtocolErrorInfo::Action action, const std::optional<Status>& error,
+                                      PendingReset::Action action, const std::optional<Status>& error,
                                       util::Logger& logger)
 {
     if (auto previous_reset = has_pending_reset(wt)) {
@@ -702,11 +707,13 @@ bool perform_client_reset_diff(DB& db_local, sync::ClientReset& reset_config, sy
                 "Client reset: path_local = %1, "
                 "client_file_ident = (ident: %2, salt: %3), "
                 "remote_path = %4, requested_mode = %5, recovery_is_allowed = %6, "
-                "actual_mode = %7, will_recover = %8",
+                "action = %7, actual_mode = %8, will_recover = %9",
                 db_local.get_path(), client_file_ident.ident, client_file_ident.salt, db_remote.get_path(),
-                reset_config.mode, reset_config.recovery_allowed, actual_mode, recover_local_changes);
-    logger.info(util::LogCategory::reset, "Client reset: originating error = %1 (action: %2)", reset_config.error,
-                reset_config.action);
+                reset_config.mode, reset_config.recovery_allowed, reset_config.action, actual_mode,
+                recover_local_changes);
+    if (reset_config.error) {
+        logger.info(util::LogCategory::reset, "Client reset: originating error = %1", *reset_config.error);
+    }
 
     auto& repl_local = dynamic_cast<ClientReplication&>(*db_local.get_replication());
     auto& history_local = repl_local.get_history();

@@ -74,7 +74,7 @@ bool ReturnsTrueWithinTimeLimit::match(util::FunctionRef<bool()> condition) cons
     return predicate_returned_true;
 }
 
-void timed_wait_for(util::UniqueFunction<bool()> condition, std::chrono::milliseconds max_ms)
+void timed_wait_for(util::FunctionRef<bool()> condition, std::chrono::milliseconds max_ms)
 {
     const auto wait_start = std::chrono::steady_clock::now();
     const auto delay = TEST_TIMEOUT_EXTRA > 0 ? max_ms + std::chrono::seconds(TEST_TIMEOUT_EXTRA) : max_ms;
@@ -86,7 +86,7 @@ void timed_wait_for(util::UniqueFunction<bool()> condition, std::chrono::millise
     });
 }
 
-void timed_sleeping_wait_for(util::UniqueFunction<bool()> condition, std::chrono::milliseconds max_ms,
+void timed_sleeping_wait_for(util::FunctionRef<bool()> condition, std::chrono::milliseconds max_ms,
                              std::chrono::milliseconds sleep_ms)
 {
     const auto wait_start = std::chrono::steady_clock::now();

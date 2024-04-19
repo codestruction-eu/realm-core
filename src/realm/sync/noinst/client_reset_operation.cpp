@@ -57,11 +57,13 @@ bool perform_client_reset(util::Logger& logger, DB& db, sync::ClientReset&& rese
 {
     REALM_ASSERT(reset_config.mode != ClientResyncMode::Manual);
     REALM_ASSERT(reset_config.fresh_copy);
-    logger.debug(util::LogCategory::reset,
-                 "Possibly beginning client reset operation: realm_path = %1, mode = %2, recovery_allowed = %3",
-                 db.get_path(), reset_config.mode, reset_config.recovery_allowed);
-    logger.debug(util::LogCategory::reset, "originating error: %1 (action: %2)", *reset_config.error,
-                 reset_config.action);
+    logger.debug(
+        util::LogCategory::reset,
+        "Possibly beginning client reset operation: realm_path = %1, mode = %2, recovery_allowed = %3, action = %4",
+        db.get_path(), reset_config.mode, reset_config.recovery_allowed, reset_config.action);
+    if (reset_config.error) {
+        logger.debug(util::LogCategory::reset, "originating error = %1", *reset_config.error);
+    }
 
     auto always_try_clean_up = util::make_scope_exit([&]() noexcept {
         std::string path_to_clean = reset_config.fresh_copy->get_path();

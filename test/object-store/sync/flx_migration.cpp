@@ -458,6 +458,9 @@ TEST_CASE("Test client migration and rollback with recovery", "[sync][flx][flx m
     //  Migrate back to FLX - and keep the realm session open
     trigger_server_migration(session.app_session(), MigrateToFLX, logger_ptr);
 
+    // Cancel any connect waits (since sync session is still active) and try to connect now
+    outer_realm->sync_session()->handle_reconnect();
+
     // wait for the fresh realm to download and merge with the current local realm
     test_state.wait_for(TestState::merge_complete, std::chrono::seconds(180));
 
@@ -480,6 +483,9 @@ TEST_CASE("Test client migration and rollback with recovery", "[sync][flx][flx m
 
     // Release the realm session; will reconnect and perform the rollback to PBS client reset
     test_state.transition_to(TestState::rollback_complete);
+
+    // Cancel any connect waits (since sync session is still active) and try to connect now
+    outer_realm->sync_session()->handle_reconnect();
 
     // During the rollback client reset, the previous migrate to flx client reset operation is still
     // tracked, but will be removed since the new rollback server requests action is incompatible.

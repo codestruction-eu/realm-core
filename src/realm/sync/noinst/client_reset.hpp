@@ -67,8 +67,10 @@ struct PendingReset {
     Timestamp time;
     // Metadata v2 fields
     bool recovery_allowed;
-    Action action = Action::NoAction;
+    Action action = Action::ClientReset;
     std::optional<Status> error;
+    // Metadata version
+    int version = 0;
 
     std::string to_string() const;
 };
