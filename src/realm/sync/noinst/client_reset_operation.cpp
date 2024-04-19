@@ -59,7 +59,9 @@ bool perform_client_reset(util::Logger& logger, DB& db, sync::ClientReset&& rese
     REALM_ASSERT(reset_config.fresh_copy);
     logger.debug(util::LogCategory::reset,
                  "Possibly beginning client reset operation: realm_path = %1, mode = %2, recovery_allowed = %3",
-                 db.get_path(), reset_config.mode, reset_config.recovery_is_allowed);
+                 db.get_path(), reset_config.mode, reset_config.recovery_allowed);
+    logger.debug(util::LogCategory::reset, "client reset error: %1 (action: %2)", reset_config.error,
+                 reset_config.action);
 
     auto always_try_clean_up = util::make_scope_exit([&]() noexcept {
         std::string path_to_clean = reset_config.fresh_copy->get_path();
@@ -96,9 +98,8 @@ bool perform_client_reset(util::Logger& logger, DB& db, sync::ClientReset&& rese
     if (reset_config.notify_after_client_reset) {
         previous_state = db.start_frozen(frozen_before_state_version);
     }
-    bool did_recover = client_reset::perform_client_reset_diff(
-        db, *reset_config.fresh_copy, new_file_ident, logger, reset_config.mode, reset_config.recovery_is_allowed,
-        sub_store, reset_config.server_requests_action, on_flx_version); // throws
+    bool did_recover = client_reset::perform_client_reset_diff(db, reset_config, new_file_ident, logger, sub_store,
+                                                               on_flx_version); // throws
 
     if (reset_config.notify_after_client_reset) {
         reset_config.notify_after_client_reset(previous_state->get_version_of_current_transaction(), did_recover);

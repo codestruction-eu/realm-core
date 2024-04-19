@@ -60,10 +60,11 @@ class SyncSocketProvider;
 /// either void async_wait_for_download_completion(WaitOperCompletionHandler) or
 /// bool wait_for_download_complete_or_client_stopped().
 struct ClientReset {
-    realm::ClientResyncMode mode;
-    sync::ProtocolErrorInfo::Action server_requests_action;
     DBRef fresh_copy;
-    bool recovery_is_allowed = true;
+    realm::ClientResyncMode mode;
+    bool recovery_allowed;
+    sync::ProtocolErrorInfo::Action action = sync::ProtocolErrorInfo::Action::ClientReset;
+    std::optional<Status> error;
     util::UniqueFunction<VersionID()> notify_before_client_reset;
     util::UniqueFunction<void(VersionID before_version, bool did_recover)> notify_after_client_reset;
 };

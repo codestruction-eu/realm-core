@@ -28,6 +28,7 @@
 #include <realm/object-store/sync/mongo_collection.hpp>
 #include <realm/object-store/sync/mongo_database.hpp>
 
+#include <realm/sync/client_base.hpp>
 #include <realm/sync/protocol.hpp>
 #include <realm/sync/noinst/client_history_impl.hpp>
 #include <realm/sync/noinst/client_reset.hpp>
@@ -73,7 +74,7 @@ bool ReturnsTrueWithinTimeLimit::match(util::FunctionRef<bool()> condition) cons
     return predicate_returned_true;
 }
 
-void timed_wait_for(util::FunctionRef<bool()> condition, std::chrono::milliseconds max_ms)
+void timed_wait_for(util::UniqueFunction<bool()> condition, std::chrono::milliseconds max_ms)
 {
     const auto wait_start = std::chrono::steady_clock::now();
     const auto delay = TEST_TIMEOUT_EXTRA > 0 ? max_ms + std::chrono::seconds(TEST_TIMEOUT_EXTRA) : max_ms;
@@ -85,7 +86,7 @@ void timed_wait_for(util::FunctionRef<bool()> condition, std::chrono::millisecon
     });
 }
 
-void timed_sleeping_wait_for(util::FunctionRef<bool()> condition, std::chrono::milliseconds max_ms,
+void timed_sleeping_wait_for(util::UniqueFunction<bool()> condition, std::chrono::milliseconds max_ms,
                              std::chrono::milliseconds sleep_ms)
 {
     const auto wait_start = std::chrono::steady_clock::now();
@@ -209,7 +210,7 @@ std::string get_compile_time_base_url()
     return unquote_string(REALM_QUOTE(REALM_MONGODB_ENDPOINT));
 #else
     return {};
-#endif
+#endif // REALM_MONGODB_ENDPOINT
 }
 
 std::string get_compile_time_admin_url()
@@ -219,10 +220,9 @@ std::string get_compile_time_admin_url()
     return unquote_string(REALM_QUOTE(REALM_ADMIN_ENDPOINT));
 #else
     return {};
-#endif
+#endif // REALM_ADMIN_ENDPOINT
 }
 #endif // REALM_ENABLE_AUTH_TESTS
-#endif // REALM_ENABLE_SYNC
 
 #if REALM_APP_SERVICES
 AutoVerifiedEmailCredentials::AutoVerifiedEmailCredentials()
@@ -307,6 +307,8 @@ void async_open_realm(const Realm::Config& config,
     task->cancel(); // don't run the above notifier again on this session
     finish(std::move(tsr), err);
 }
+
+#endif // REALM_ENABLE_SYNC
 
 class TestHelper {
 public:
@@ -425,13 +427,16 @@ struct FakeLocalClientReset : public TestClientReset {
 
             sync::SaltedFileIdent fake_ident{1, 123456789};
             auto local_db = TestHelper::get_db(local_realm);
-            auto remote_db = TestHelper::get_db(remote_realm);
             auto logger = util::Logger::get_default_logger();
-
+            sync::ClientReset reset_config;
+            reset_config.fresh_copy = TestHelper::get_db(remote_realm);
+            reset_config.mode = m_mode;
+            reset_config.recovery_allowed =
+                m_mode == ClientResyncMode::Recover || m_mode == ClientResyncMode::RecoverOrDiscard;
+            reset_config.action = sync::ProtocolErrorInfo::Action::ClientReset;
+            reset_config.error = {ErrorCodes::SyncClientResetRequired, "Bad client file ident"};
             using _impl::client_reset::perform_client_reset_diff;
-            constexpr bool recovery_is_allowed = true;
-            perform_client_reset_diff(*local_db, *remote_db, fake_ident, *logger, m_mode, recovery_is_allowed,
-                                      nullptr, sync::ProtocolErrorInfo::Action::ClientReset, [](int64_t) {});
+            perform_client_reset_diff(*local_db, reset_config, fake_ident, *logger, nullptr, [](int64_t) {});
 
             remote_realm->close();
             if (m_on_post_reset) {
