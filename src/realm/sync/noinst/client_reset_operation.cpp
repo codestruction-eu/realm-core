@@ -60,7 +60,7 @@ bool perform_client_reset(util::Logger& logger, DB& db, sync::ClientReset&& rese
     logger.debug(util::LogCategory::reset,
                  "Possibly beginning client reset operation: realm_path = %1, mode = %2, recovery_allowed = %3",
                  db.get_path(), reset_config.mode, reset_config.recovery_allowed);
-    logger.debug(util::LogCategory::reset, "client reset error: %1 (action: %2)", reset_config.error,
+    logger.debug(util::LogCategory::reset, "originating error: %1 (action: %2)", *reset_config.error,
                  reset_config.action);
 
     auto always_try_clean_up = util::make_scope_exit([&]() noexcept {
