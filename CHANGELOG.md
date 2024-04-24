@@ -5,6 +5,8 @@
 * Add `SyncClientConfig::security_access_group` which allows specifying the access group to use for the sync metadata Realm's encryption key. Setting this is required when sharing the metadata Realm between apps on Apple platforms ([#7552](https://github.com/realm/realm-core/pull/7552)).
 * When connecting to multiple server apps, a unique encryption key is used for each of the metadata Realms rather than sharing one between them ([#7552](https://github.com/realm/realm-core/pull/7552)).
 * Introduce the new `SyncUser` interface which can be implemented by SDKs to use sync without the core App Services implementation (or just for greater control over user behavior in tests). ([PR #7300](https://github.com/realm/realm-core/pull/7300)).
+* Improve perfomance of "chained OR equality" queries for UUID/ObjectId types and RQL parsed "IN" queries on string/int/uuid/objectid types. ([.Net #3566](https://github.com/realm/realm-dotnet/issues/3566), since the introduction of these types)
+* Introducing `Query::in()` which allows SDKs to take advantage of improved performance when building equality conditions against many constants. ([#7582](https://github.com/realm/realm-core/pull/7582))
 * Add the originating error that caused a client reset to occur to the client reset tracking metadata storage. ([PR #7542](https://github.com/realm/realm-core/pull/7542))
 
 ### Fixed
@@ -17,6 +19,7 @@
   * Fixed a `DecryptionFailed` exception thrown when opening a small (<4k of data) Realm generated on a device with a page size of 4k if it was bundled and opened on a device with a larger page size (since the beginning).
   * Fixed an issue during a subsequent open of an encrypted Realm for some rare allocation patterns when the top ref was within ~50 bytes of the end of a page. This could manifest as a DecryptionFailed exception or as an assertion: `encrypted_file_mapping.hpp:183: Assertion failed: local_ndx < m_page_state.size()`. ([#7319](https://github.com/realm/realm-core/issues/7319))
 * Non-streaming download sync progress notification is fixed for flexible sync Realms where before it was sometimes stopping to emit values right after the registration of the callback (PR [#7561](https://github.com/realm/realm-core/issues/7561)).
+* Schema initialization could hit an assertion failure if the sync client applied a downloaded changeset while the Realm file was in the process of being opened ([#7041](https://github.com/realm/realm-core/issues/7041), since v11.4.0).
 * Fix client reset failure during sync migration due to previous incomplete client reset. ([PR #7542](https://github.com/realm/realm-core/pull/7542), since v13.11.0)
 
 ### Breaking changes
@@ -51,6 +54,10 @@
 * The ownership relationship between App and User has changed. User now strongly retains App and App has a weak cache of Users. This means that creating a SyncConfig or opening a Realm will keep the parent App alive, rather than things being in a broken state if the App is deallocated. ([PR #7300](https://github.com/realm/realm-core/pull/7300).
 * A new CMake define `REALM_APP_SERVICES` can be used to compile out core's default implmentation of the application services. ([#7268](https://github.com/realm/realm-core/issues/7268))
 * Fix a race condition in Promise which could result in an assertion failure if it was destroyed immediately after a `get()` on the Future returned. The problematic scenario only occurred in test code and not in library code ([PR #7602](https://github.com/realm/realm-core/pull/7602)).
+* Catch2 is no longer required as a submodule if the `REALM_NO_TESTS` flag is set.
+* Sha-2 is no longer required as a submodule on Windows if linking with OpenSSL.
+* The Catch2 submodule has moved to `test/external/catch`.
+* Fix possible file corruption if using Transaction::copy_to if nested collections are present.
 
 ----------------------------------------------
 
