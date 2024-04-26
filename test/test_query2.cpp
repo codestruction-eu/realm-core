@@ -4941,9 +4941,12 @@ TEST(Query_IntOrQueryOptimisation)
         auto obj = table->create_object();
         obj.set<bool>(col_active, (i % 10) != 0);
         obj.set<int>(col_id, i);
-        if (i == 0) obj.set(col_optype, "CREATE");
-        if (i == 1) obj.set(col_optype, "DELETE");
-        if (i == 2) obj.set(col_optype, "CREATE");
+        if (i == 0)
+            obj.set(col_optype, "CREATE");
+        if (i == 1)
+            obj.set(col_optype, "DELETE");
+        if (i == 2)
+            obj.set(col_optype, "CREATE");
     }
     auto optype = table->column<String>(col_optype);
     auto active = table->column<Bool>(col_active);
@@ -5360,9 +5363,9 @@ TEST(Query_LinksWithIndex)
 
     Query q1 =
         origin->link(col_linklist).link(col_link).backlink(*foo, col_foo).column<String>(col_location) == "Fyn";
-    CHECK_EQUAL(q1.find(),  obj0.get_key());
+    CHECK_EQUAL(q1.find(), obj0.get_key());
     Query q2 = origin->link(col_linklist).link(col_link).backlink(*foo, col_foo).column<Int>(col_score) == 5;
-    CHECK_EQUAL(q2.find(),  obj0.get_key());
+    CHECK_EQUAL(q2.find(), obj0.get_key());
 
     // Make sure that changes in the table are reflected in the query result
     middle->get_object(m3).set(col_link, target->find_first(col_value, strings[1]));
@@ -5628,6 +5631,51 @@ TEST_TYPES(Query_Mixed, std::true_type, std::false_type)
     CHECK_EQUAL(tv.size(), 10);
     tv = (origin->link(col_links).column<Mixed>(col_any).ends_with("g40", exact_match)).find_all();
     CHECK_EQUAL(tv.size(), 1);
+}
+
+TEST(Query_NestedListNull)
+{
+    SHARED_GROUP_TEST_PATH(path);
+    auto hist = make_in_realm_history();
+    DBRef db = DB::create(*hist, path);
+    auto tr = db->start_write();
+    auto foo = tr->add_table("foo");
+    auto col_any = foo->add_column(type_Mixed, "mixed");
+
+    const char* listOfListOfNull = R"([[null]])";
+
+    foo->create_object().set_json(col_any, R"("not a list")");
+    foo->create_object().set_json(col_any, listOfListOfNull);
+    foo->create_object().set_json(col_any, listOfListOfNull);
+    foo->create_object().set_json(col_any, listOfListOfNull);
+
+    CHECK_EQUAL(foo->query("mixed[0][0] == null").count(), 3);
+    CHECK_EQUAL(foo->query("mixed[0][5] == null").count(), 0);
+    CHECK_EQUAL(foo->query("mixed[0][*] == null").count(), 3);
+}
+
+TEST(Query_NestedDictionaryNull)
+{
+    SHARED_GROUP_TEST_PATH(path);
+    auto hist = make_in_realm_history();
+    DBRef db = DB::create(*hist, path);
+    auto tr = db->start_write();
+    auto foo = tr->add_table("foo");
+    auto col_any = foo->add_column(type_Mixed, "mixed");
+
+    const char* dictOfDictOfNull = R"({ "nestedDict": { "nullValue": null }})";
+
+    foo->create_object().set_json(col_any, R"("not a dictionary")");
+    foo->create_object().set_json(col_any, dictOfDictOfNull);
+    foo->create_object().set_json(col_any, dictOfDictOfNull);
+    foo->create_object().set_json(col_any, dictOfDictOfNull);
+
+    CHECK_EQUAL(foo->query("mixed['nestedDict']['nullValue'] == null").count(), 3);
+    CHECK_EQUAL(foo->query("mixed.nestedDict.nullValue == null").count(), 3);
+    CHECK_EQUAL(foo->query("mixed['nestedDict']['foo'] == null").count(), 3);
+    CHECK_EQUAL(foo->query("mixed.nestedDict.foo == null").count(), 3);
+    CHECK_EQUAL(foo->query("mixed.nestedDict[*] == null").count(), 3);
+    CHECK_EQUAL(foo->query("mixed.nestedDict[*].@type == 'null'").count(), 3);
 }
 
 TEST(Query_ListOfMixed)
