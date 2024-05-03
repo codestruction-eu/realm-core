@@ -1573,18 +1573,9 @@ TEST_CASE("flx: uploading an object that is out-of-view results in compensating 
                            {"queryable_str_field", PropertyType::String | PropertyType::Nullable},
                        }}};
 
-        AppCreateConfig::ServiceRole role;
-        role.name = "compensating_write_perms";
+        AppCreateConfig::ServiceRole role{"compensating_write_perms"};
+        role.document_filters.write = {{"queryable_str_field", {{"$in", nlohmann::json::array({"foo", "bar"})}}}};
 
-        AppCreateConfig::ServiceRoleDocumentFilters doc_filters;
-        doc_filters.read = true;
-        doc_filters.write = {{"queryable_str_field", {{"$in", nlohmann::json::array({"foo", "bar"})}}}};
-        role.document_filters = doc_filters;
-
-        role.insert_filter = true;
-        role.delete_filter = true;
-        role.read = true;
-        role.write = true;
         FLXSyncTestHarness::ServerSchema server_schema{schema, {"queryable_str_field"}, {role}};
         harness.emplace("flx_bad_query", server_schema);
     }
@@ -3531,18 +3522,8 @@ TEST_CASE("flx: data ingest - dev mode", "[sync][flx][data ingest][baas]") {
 }
 
 TEST_CASE("flx: data ingest - write not allowed", "[sync][flx][data ingest][baas]") {
-    AppCreateConfig::ServiceRole role;
-    role.name = "asymmetric_write_perms";
-
-    AppCreateConfig::ServiceRoleDocumentFilters doc_filters;
-    doc_filters.read = true;
-    doc_filters.write = false;
-    role.document_filters = doc_filters;
-
-    role.insert_filter = true;
-    role.delete_filter = true;
-    role.read = true;
-    role.write = true;
+    AppCreateConfig::ServiceRole role{"asymmetric_write_perms"};
+    role.document_filters.write = false;
 
     Schema schema({
         {"Asymmetric",
@@ -4020,19 +4001,10 @@ TEST_CASE("flx: convert flx sync realm to bundled realm", "[app][flx][baas]") {
 }
 
 TEST_CASE("flx: compensating write errors get re-sent across sessions", "[sync][flx][compensating write][baas]") {
-    AppCreateConfig::ServiceRole role;
-    role.name = "compensating_write_perms";
+    AppCreateConfig::ServiceRole role{"compensating_write_perms"};
+    role.document_filters.write = {
+        {"queryable_str_field", nlohmann::json{{"$in", nlohmann::json::array({"foo", "bar"})}}}};
 
-    AppCreateConfig::ServiceRoleDocumentFilters doc_filters;
-    doc_filters.read = true;
-    doc_filters.write =
-        nlohmann::json{{"queryable_str_field", nlohmann::json{{"$in", nlohmann::json::array({"foo", "bar"})}}}};
-    role.document_filters = doc_filters;
-
-    role.insert_filter = true;
-    role.delete_filter = true;
-    role.read = true;
-    role.write = true;
     FLXSyncTestHarness::ServerSchema server_schema{
         g_simple_embedded_obj_schema, {"queryable_str_field", "queryable_int_field"}, {role}};
     FLXSyncTestHarness::Config harness_config("flx_bad_query", server_schema);
@@ -4972,9 +4944,6 @@ TEST_CASE("flx: role change bootstrap", "[sync][flx][baas][role_change][bootstra
     // Enable the role change bootstraps
     REQUIRE(app_session.admin_api.set_feature_flag(app_session.server_app_id, "allow_permissions_bootstrap", true));
 
-    // Get the current rules so it can be updated during the test
-    auto rule = app_session.admin_api.get_default_rule(app_session.server_app_id);
-
     // Initialize the realm with some data
     harness.load_initial_data([&fill_person_schema, num_emps, num_mgrs, num_dirs](SharedRealm realm) {
         fill_person_schema(realm, "employee", num_emps);
@@ -5063,8 +5032,7 @@ TEST_CASE("flx: role change bootstrap", "[sync][flx][baas][role_change][bootstra
         REQUIRE(results.size() == num_total);
     }
 
-    auto update_perms_and_verify = [&](std::optional<nlohmann::json> doc_filter, size_t cnt_emps, size_t cnt_mgrs,
-                                       size_t cnt_dirs) {
+    auto update_perms_and_verify = [&](nlohmann::json role_rules, size_t cnt_emps, size_t cnt_mgrs, size_t cnt_dirs) {
         {
             std::lock_guard lock(callback_mutex);
             did_client_reset = false;
@@ -5075,12 +5043,9 @@ TEST_CASE("flx: role change bootstrap", "[sync][flx][baas][role_change][bootstra
         // Reset the state machine
         state_machina.transition_to(TestState::start);
 
-        rule["roles"][0]["document_filters"]["read"] = doc_filter.value_or(true);
-        rule["roles"][0]["document_filters"]["write"] = doc_filter.value_or(true);
-
         // Update the permissions on the server - should send an error to the client to force
         // it to reconnect
-        app_session.admin_api.update_default_rule(app_session.server_app_id, rule);
+        app_session.admin_api.update_default_rule(app_session.server_app_id, role_rules);
 
         // After updating the permissions (if they are different), the server should send an
         // error that will disconnect/reconnect the session - verify the reconnect occurs.
@@ -5141,20 +5106,38 @@ TEST_CASE("flx: role change bootstrap", "[sync][flx][baas][role_change][bootstra
         // Reset the state machine to "not ready" before leaving
         state_machina.transition_to(TestState::not_ready);
     };
-    {
-        // Single message bootstrap - remove employees, keep mgrs/dirs
-        nlohmann::json doc_filter = {{"role", {{"$in", {"manager", "director"}}}}};
-        update_perms_and_verify(doc_filter, 0, num_mgrs, num_dirs);
+
+    SECTION("Role changes lead to global objects in/out of view") {
+        // Get the current rules so it can be updated during the test
+        auto rule = app_session.admin_api.get_default_rule(app_session.server_app_id);
+
+        auto update_role = [&rule](nlohmann::json doc_filter) {
+            std::cout << "NEW DOC FILTER: " << doc_filter << std::endl;
+            rule["roles"][0]["document_filters"]["read"] = doc_filter;
+            rule["roles"][0]["document_filters"]["write"] = doc_filter;
+            std::cout << "NEW RULES: " << rule << std::endl;
+        };
+
+        {
+            // Single message bootstrap - remove employees, keep mgrs/dirs
+            update_role({{"role", {{"$in", {"manager", "director"}}}}});
+            update_perms_and_verify(rule, 0, num_mgrs, num_dirs);
+        }
+        {
+            // Multi-message bootstrap - add employeees, remove managers and directors
+            update_role({{"role", "employee"}});
+            update_perms_and_verify(rule, num_emps, 0, 0);
+        }
+        {
+            // Single message bootstrap - add back managers and directors
+            update_role(true);
+            update_perms_and_verify(rule, num_emps, num_mgrs, num_dirs);
+        }
     }
-    {
-        // Multi-message bootstrap - add employeees, remove managers and directors
-        nlohmann::json doc_filter = {{"role", "employee"}};
-        update_perms_and_verify(doc_filter, num_emps, 0, 0);
-    }
-    {
-        // Single message bootstrap - add back managers and directors
-        update_perms_and_verify(std::nullopt, num_emps, num_mgrs, num_dirs);
-    }
+
+    // SECTION("Role changes for one user do not change unaffected user") {
+    //
+    // }
 }
 
 } // namespace realm::app

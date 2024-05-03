@@ -204,17 +204,17 @@ struct AppCreateConfig {
         // document_filters describe which objects can be read from/written to, as
         // specified by the below read and write expressions. Set both to true to give read/write
         // access on all objects
-        ServiceRoleDocumentFilters document_filters;
+        ServiceRoleDocumentFilters document_filters = {true, true};
 
         // insert_filter and delete_filter describe which objects can be created and erased by the client,
         // respectively. Set both to true if all objects can be created/erased by the client
-        nlohmann::json insert_filter;
-        nlohmann::json delete_filter;
+        nlohmann::json insert_filter = true;
+        nlohmann::json delete_filter = true;
 
         // read and write describe the permissions for "read-all-fields"/"write-all-fields" behavior. Set both to true
         // if all fields should have read/write access
-        nlohmann::json read;
-        nlohmann::json write;
+        nlohmann::json read = true;
+        nlohmann::json write = true;
 
         // NB: for more granular field-level permissions, the "fields" and "additional_fields" keys can be included in
         // a service role to describe which fields individually can be read/written. These fields have been omitted
@@ -251,10 +251,10 @@ struct AppCreateConfig {
 
     std::shared_ptr<util::Logger> logger;
 };
-
 realm::Schema get_default_schema();
 AppCreateConfig default_app_config();
 AppCreateConfig minimal_app_config(const std::string& name, const Schema& schema);
+nlohmann::json transform_service_role(const AppCreateConfig::ServiceRole& role_def);
 
 struct AppSession {
     std::string client_app_id;
