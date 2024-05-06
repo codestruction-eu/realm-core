@@ -251,6 +251,7 @@ struct AppCreateConfig {
 
     std::shared_ptr<util::Logger> logger;
 };
+
 realm::Schema get_default_schema();
 AppCreateConfig default_app_config();
 AppCreateConfig minimal_app_config(const std::string& name, const Schema& schema);

@@ -4907,10 +4907,10 @@ TEST_CASE("flx: role change bootstrap", "[sync][flx][baas][role_change][bootstra
                                  {"firstName", PropertyType::String},
                                  {"lastName", PropertyType::String}}}};
 
-    size_t num_emps = 5000;
-    size_t num_mgrs = 200;
-    size_t num_dirs = 25;
-    size_t num_total = num_emps + num_mgrs + num_dirs;
+    constexpr size_t num_emps = 5000;
+    constexpr size_t num_mgrs = 200;
+    constexpr size_t num_dirs = 25;
+    constexpr size_t num_total = num_emps + num_mgrs + num_dirs;
     auto fill_person_schema = [](SharedRealm realm, std::string role, size_t count) {
         CppContext c(realm);
         for (size_t i = 0; i < count; ++i) {
@@ -4945,7 +4945,7 @@ TEST_CASE("flx: role change bootstrap", "[sync][flx][baas][role_change][bootstra
     REQUIRE(app_session.admin_api.set_feature_flag(app_session.server_app_id, "allow_permissions_bootstrap", true));
 
     // Initialize the realm with some data
-    harness.load_initial_data([&fill_person_schema, num_emps, num_mgrs, num_dirs](SharedRealm realm) {
+    harness.load_initial_data([&fill_person_schema](SharedRealm realm) {
         fill_person_schema(realm, "employee", num_emps);
         fill_person_schema(realm, "manager", num_mgrs);
         fill_person_schema(realm, "director", num_dirs);
@@ -5009,43 +5009,63 @@ TEST_CASE("flx: role change bootstrap", "[sync][flx][baas][role_change][bootstra
         did_client_reset = true;
     };
 
-    auto realm = Realm::get_shared_realm(config);
-    REQUIRE(!wait_for_download(*realm));
-    REQUIRE(!wait_for_upload(*realm));
+    auto set_up_realm = [](SharedRealm realm, size_t expected_cnt) {
+        {
+            // Set up the initial subscription
+            auto table = realm->read_group().get_table("class_Person");
+            auto new_subs = realm->get_latest_subscription_set().make_mutable_copy();
+            new_subs.insert_or_assign(Query(table));
+            auto subs = new_subs.commit();
 
-    // Set up the initial subscription
-    {
-        auto table = realm->read_group().get_table("class_Person");
-        auto new_subs = realm->get_latest_subscription_set().make_mutable_copy();
-        new_subs.insert_or_assign(Query(table));
-        auto subs = new_subs.commit();
+            // Wait for subscription update and sync to complete
+            subs.get_state_change_notification(sync::SubscriptionSet::State::Complete).get();
+            REQUIRE(!wait_for_download(*realm));
+            REQUIRE(!wait_for_upload(*realm));
+            wait_for_advance(*realm);
+        }
+        {
+            // Verify the data was downloaded
+            auto table = realm->read_group().get_table("class_Person");
+            Results results(realm, Query(table));
+            REQUIRE(results.size() == expected_cnt);
+        }
+    };
 
-        // Wait for subscription update and sync to complete
-        subs.get_state_change_notification(sync::SubscriptionSet::State::Complete).get();
-        REQUIRE(!wait_for_download(*realm));
-        REQUIRE(!wait_for_upload(*realm));
-        wait_for_advance(*realm);
-    }
-    {
-        auto table = realm->read_group().get_table("class_Person");
-        Results results(realm, Query(table));
-        REQUIRE(results.size() == num_total);
-    }
+    auto verify_records = [](SharedRealm check_realm, size_t cnt_emps, size_t cnt_mgrs, size_t cnt_dirs) {
+        // Validate the expected number of entries for each role type after the role change
+        auto table = check_realm->read_group().get_table("class_Person");
+        REQUIRE(table->size() == (cnt_emps + cnt_mgrs + cnt_dirs));
+        auto role_col = table->get_column_key("role");
+        auto table_query = Query(table).equal(role_col, "director").Or().equal(role_col, "manager");
+        auto results = Results(check_realm, table_query);
+        CHECK(results.size() == (cnt_mgrs + cnt_dirs));
+        table_query = Query(table).equal(role_col, "employee");
+        results = Results(check_realm, table_query);
+        CHECK(results.size() == cnt_emps);
+        table_query = Query(table).equal(role_col, "manager");
+        results = Results(check_realm, table_query);
+        CHECK(results.size() == cnt_mgrs);
+        table_query = Query(table).equal(role_col, "director");
+        results = Results(check_realm, table_query);
+        CHECK(results.size() == cnt_dirs);
+    };
 
-    auto update_perms_and_verify = [&](nlohmann::json role_rules, size_t cnt_emps, size_t cnt_mgrs, size_t cnt_dirs) {
+    auto update_perms_and_verify = [&](nlohmann::json new_rules, SharedRealm check_realm, size_t cnt_emps,
+                                       size_t cnt_mgrs, size_t cnt_dirs) {
         {
             std::lock_guard lock(callback_mutex);
             did_client_reset = false;
             msg_count = 0;
             role_change_bootstrap = false;
-            query_version = realm->get_active_subscription_set().version();
+            query_version = check_realm->get_active_subscription_set().version();
         }
         // Reset the state machine
         state_machina.transition_to(TestState::start);
 
         // Update the permissions on the server - should send an error to the client to force
         // it to reconnect
-        app_session.admin_api.update_default_rule(app_session.server_app_id, role_rules);
+        logger->trace("New rule definitions: %1", new_rules);
+        app_session.admin_api.update_default_rule(app_session.server_app_id, new_rules);
 
         // After updating the permissions (if they are different), the server should send an
         // error that will disconnect/reconnect the session - verify the reconnect occurs.
@@ -5054,7 +5074,7 @@ TEST_CASE("flx: role change bootstrap", "[sync][flx][baas][role_change][bootstra
         // Assuming the session disconnects and reconnects, the server initiated role change
         // bootstrap download will take place when the session is re-established and will
         // complete before the server sends the initial MARK response.
-        REQUIRE(!wait_for_download(*realm));
+        REQUIRE(!wait_for_download(*check_realm));
 
         // The tricky part here is that a single server initiated bootstrap message
         // with one changeset will be treated as a typical download message and the
@@ -5082,27 +5102,12 @@ TEST_CASE("flx: role change bootstrap", "[sync][flx][baas][role_change][bootstra
         // should have already been applied.
         REQUIRE((!multi_msg || state_machina.get() == TestState::complete));
 
-        // Wait for the upload to complete and the updated data to be ready in the local realm.
-        REQUIRE(!wait_for_upload(*realm));
-        wait_for_advance(*realm);
-        {
-            // Validate the expected number of entries for each role type after the role change
-            auto table = realm->read_group().get_table("class_Person");
-            REQUIRE(table->size() == (cnt_emps + cnt_mgrs + cnt_dirs));
-            auto role_col = table->get_column_key("role");
-            auto table_query = Query(table).equal(role_col, "director").Or().equal(role_col, "manager");
-            auto results = Results(realm, table_query);
-            CHECK(results.size() == (cnt_mgrs + cnt_dirs));
-            table_query = Query(table).equal(role_col, "employee");
-            results = Results(realm, table_query);
-            CHECK(results.size() == cnt_emps);
-            table_query = Query(table).equal(role_col, "manager");
-            results = Results(realm, table_query);
-            CHECK(results.size() == cnt_mgrs);
-            table_query = Query(table).equal(role_col, "director");
-            results = Results(realm, table_query);
-            CHECK(results.size() == cnt_dirs);
-        }
+        // Wait for the upload to complete and verify the expected data in the local realm.
+        REQUIRE(!wait_for_upload(*check_realm));
+        wait_for_advance(*check_realm);
+
+        verify_records(check_realm, cnt_emps, cnt_mgrs, cnt_dirs);
+
         // Reset the state machine to "not ready" before leaving
         state_machina.transition_to(TestState::not_ready);
     };
@@ -5112,32 +5117,118 @@ TEST_CASE("flx: role change bootstrap", "[sync][flx][baas][role_change][bootstra
         auto rule = app_session.admin_api.get_default_rule(app_session.server_app_id);
 
         auto update_role = [&rule](nlohmann::json doc_filter) {
-            std::cout << "NEW DOC FILTER: " << doc_filter << std::endl;
             rule["roles"][0]["document_filters"]["read"] = doc_filter;
             rule["roles"][0]["document_filters"]["write"] = doc_filter;
-            std::cout << "NEW RULES: " << rule << std::endl;
         };
+
+        auto realm = Realm::get_shared_realm(config);
+        REQUIRE(!wait_for_download(*realm));
+        REQUIRE(!wait_for_upload(*realm));
+        set_up_realm(realm, num_total);
 
         {
             // Single message bootstrap - remove employees, keep mgrs/dirs
             update_role({{"role", {{"$in", {"manager", "director"}}}}});
-            update_perms_and_verify(rule, 0, num_mgrs, num_dirs);
+            update_perms_and_verify(rule, realm, 0, num_mgrs, num_dirs);
         }
         {
             // Multi-message bootstrap - add employeees, remove managers and directors
             update_role({{"role", "employee"}});
-            update_perms_and_verify(rule, num_emps, 0, 0);
+            update_perms_and_verify(rule, realm, num_emps, 0, 0);
         }
         {
             // Single message bootstrap - add back managers and directors
             update_role(true);
-            update_perms_and_verify(rule, num_emps, num_mgrs, num_dirs);
+            update_perms_and_verify(rule, realm, num_emps, num_mgrs, num_dirs);
         }
     }
 
-    // SECTION("Role changes for one user do not change unaffected user") {
-    //
-    // }
+    SECTION("Role changes for one user do not change unaffected user") {
+        // Rules for the tests:
+        // While the default realm only allows access to the employee records
+        AppCreateConfig::ServiceRole general_role{"default"};
+        general_role.document_filters.read = {{"role", "employee"}};
+        general_role.document_filters.write = {{"role", "employee"}};
+        // The user1 realm allows access to all records
+        AppCreateConfig::ServiceRole user1_role{"user 1 role"};
+        user1_role.apply_when = {{"%%user.id", config.sync_config->user->user_id()}};
+        // The user1 realm will be updated to only have access to employee and managers
+        AppCreateConfig::ServiceRole user1_role_2 = user1_role;
+        user1_role_2.document_filters.read = {{"role", {{"$in", {"employee", "manager"}}}}};
+        user1_role_2.document_filters.write = {{"role", {{"$in", {"employee", "manager"}}}}};
+
+        // Create another user and a new realm config for that user
+        create_user_and_log_in(harness.app());
+        auto config_2 = harness.make_test_file();
+        std::mutex callback_mutex;
+        bool realm_2_download_rx = false;
+        config_2.sync_config->on_sync_client_event_hook =
+            [&callback_mutex, &realm_2_download_rx](std::weak_ptr<SyncSession>, const SyncClientHookData& data) {
+                using Event = SyncClientHookEvent;
+                if (data.event == Event::DownloadMessageReceived || data.event == Event::BootstrapProcessed) {
+                    // If a download message was received or bootstrap was processed, then record it occurred
+                    std::lock_guard lock(callback_mutex);
+                    realm_2_download_rx = true;
+                }
+                return SyncClientHookAction::NoAction;
+            };
+
+        REQUIRE(config.sync_config->user->user_id() != config_2.sync_config->user->user_id());
+
+        // Set up the first realm for the current user
+        auto realm = Realm::get_shared_realm(config);
+        REQUIRE(!wait_for_download(*realm));
+        REQUIRE(!wait_for_upload(*realm));
+        set_up_realm(realm, num_total);
+
+        auto rules = app_session.admin_api.get_default_rule(app_session.server_app_id);
+        rules["roles"][0] = {transform_service_role(general_role)};
+        {
+            auto realm_2 = Realm::get_shared_realm(config_2);
+            REQUIRE(!wait_for_download(*realm_2));
+            REQUIRE(!wait_for_upload(*realm_2));
+            set_up_realm(realm_2, num_total);
+
+            // Add the initial rule and verify the data in realm 1 and 2 (should be same)
+            update_perms_and_verify(rules, realm, num_emps, 0, 0);
+            REQUIRE(!wait_for_download(*realm_2));
+            REQUIRE(!wait_for_upload(*realm_2));
+            verify_records(realm_2, num_emps, 0, 0);
+        }
+        {
+            // Reopen realm 2 so the hook callback can be added
+            auto realm_2 = Realm::get_shared_realm(config_2);
+            REQUIRE(!wait_for_download(*realm_2));
+            REQUIRE(!wait_for_upload(*realm_2));
+            verify_records(realm_2, num_emps, 0, 0);
+            {
+                std::lock_guard lock(callback_mutex);
+                realm_2_download_rx = false;
+            }
+
+            // Add a specific rule for the realm 1 user and verify the data
+            rules["roles"] = {transform_service_role(user1_role), transform_service_role(general_role)};
+            update_perms_and_verify(rules, realm, num_emps, num_mgrs, num_dirs);
+
+            // Realm 2 data should not change (and there shouldn't be any download messages)
+            {
+                std::lock_guard lock(callback_mutex);
+                REQUIRE_FALSE(realm_2_download_rx);
+            }
+            verify_records(realm_2, num_emps, 0, 0);
+
+            // Update the doc filter for the realm 1 user rules and verify the data
+            rules["roles"][0] = {transform_service_role(user1_role_2)};
+            update_perms_and_verify(rules, realm, num_emps, num_mgrs, 0);
+
+            // Realm 2 data should not change (and there shouldn't be any download messages)
+            {
+                std::lock_guard lock(callback_mutex);
+                REQUIRE_FALSE(realm_2_download_rx);
+            }
+            verify_records(realm_2, num_emps, 0, 0);
+        }
+    }
 }
 
 } // namespace realm::app
