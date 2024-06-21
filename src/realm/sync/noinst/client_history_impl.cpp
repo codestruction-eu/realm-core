@@ -423,7 +423,7 @@ void ClientHistory::integrate_server_changesets(
     const SyncProgress& progress, DownloadableProgress downloadable_bytes,
     util::Span<const RemoteChangeset> incoming_changesets, VersionInfo& version_info, DownloadBatchState batch_state,
     util::Logger& logger, const TransactionRef& transact,
-    util::UniqueFunction<void(const TransactionRef&, util::Span<Changeset>)> run_in_write_tr)
+    util::UniqueFunction<void(const Transaction&, util::Span<Changeset>)> run_in_write_tr)
 {
     REALM_ASSERT(incoming_changesets.size() != 0);
     REALM_ASSERT(
@@ -502,7 +502,7 @@ void ClientHistory::integrate_server_changesets(
             update_sync_progress(progress, downloadable_bytes); // Throws
         }
         if (run_in_write_tr) {
-            run_in_write_tr(transact, changesets_for_cb);
+            run_in_write_tr(*transact, changesets_for_cb);
         }
 
         // The reason we can use the `origin_timestamp`, and the `origin_file_ident`

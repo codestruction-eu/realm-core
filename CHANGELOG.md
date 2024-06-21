@@ -12,6 +12,7 @@
 * Fixed the collapse/rejoin of clusters which contained nested collections with links. This could manifest as `array.cpp:319: Array::move() Assertion failed: begin <= end [2, 1]` when removing an object. ([#7839](https://github.com/realm/realm-core/issues/7839), since the introduction of nested collections in v14.0.0-beta.0)
 * wait_for_upload_completion() was inconsistent in how it handled commits which did not produce any changesets to upload. Previously it would sometimes complete immediately if all commits waiting to be uploaded were empty, and at other times it would wait for a server roundtrip. It will now always complete immediately. ([PR #7796](https://github.com/realm/realm-core/pull/7796)).
 * `realm_sync_session_handle_error_for_testing` parameter `is_fatal` was flipped changing the expected behavior. (#[7750](https://github.com/realm/realm-core/issues/7750)).
+* There was a window of time between when a newly created subscription set would become the active subscription set and when the previously active subscription set was marked as superseded. This did not cause any internal problems, but may have been confusing. Old subscription sets are now superseded in the same write transaction as the newer one becomes the active one ( ([PR #7862](https://github.com/realm/realm-core/pull/7862)), since v12.12.0).
 
 ### Breaking changes
 * None.
@@ -26,6 +27,7 @@
 * Upload completion is now tracked in a multiprocess-compatible manner ([PR #7796](https://github.com/realm/realm-core/pull/7796)).
 * The local realm will assume the the client file ident of the fresh realm during a client reset. ([PR #7850](https://github.com/realm/realm-core/pull/7850))
 * Protocol version has been updated to v14 to support server intiated bootstraps and role change updates without a client reset. ([PR #7440](https://github.com/realm/realm-core/pull/7440))
+* Subscription set state change notifications now work in a multiprocess-compatible manner ([PR #7862](https://github.com/realm/realm-core/pull/7862)).
 
 ----------------------------------------------
 
