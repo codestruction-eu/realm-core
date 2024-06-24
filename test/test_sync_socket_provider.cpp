@@ -125,7 +125,7 @@ public:
     bool websocket_closed_handler(bool was_clean, WebSocketError error, std::string_view msg) override
     {
         m_queue->add_event(WebSocketEvent::CloseFrame, std::string{msg}, error, was_clean);
-        return !m_queue->client_is_stopped();
+        return false;
     }
 
 private:
@@ -215,9 +215,10 @@ public:
         })
     {
         do_synchronous_post<void>(m_service, [this]() mutable {
-            m_tls_context.use_certificate_chain_file(test_util::get_test_resource_path() +
-                                                     "test_util_network_ssl_ca.pem");
-            m_tls_context.use_private_key_file(test_util::get_test_resource_path() + "test_util_network_ssl_key.pem");
+            auto ca_dir = test_util::get_test_resource_path();
+            m_tls_context.use_certificate_chain_file(ca_dir +
+                                                     "localhost-chain.crt.pem");
+            m_tls_context.use_private_key_file(ca_dir + "localhost-server.key.pem");
             m_acceptor.open(m_endpoint.protocol());
             m_acceptor.bind(m_endpoint);
             m_endpoint = m_acceptor.local_endpoint();
@@ -243,6 +244,8 @@ public:
         ep.path = "/";
         ep.is_ssl = true;
         ep.address = "localhost";
+        ep.ssl_trust_certificate_path = test_util::get_test_resource_path() + "crt.pem";
+        ep.verify_servers_ssl_certificate = true;
         ep.protocols = {"RealmTestWebSocket#1"};
         return ep;
     }
@@ -373,6 +376,11 @@ public:
         void shutdown_websocket()
         {
             websocket.stop();
+            std::error_code ec;
+            tls_stream.shutdown(ec);
+            if (ec) {
+                logger->warn("Error shutting down tls stream: %1", ec);
+            }
             socket.close();
         }
 
@@ -405,7 +413,9 @@ public:
 
         void websocket_handshake_completion_handler(const HTTPHeaders&) override
         {
-            events.add_event(WebSocketEvent::HandshakeComplete);
+            // We always complete the websocket handshake by calling initiate_server_websocket_after_handshake()
+            // so this should never be called.
+            REALM_UNREACHABLE();
         }
 
         void websocket_read_error_handler(std::error_code) override
@@ -571,18 +581,6 @@ TEST(DefaultSocketProvider_CleanCloseFrame)
     CHECK(close_call.close_code == WebSocketError::websocket_ok);
     CHECK(close_call.payload == "Shutdown okay");
     CHECK(close_call.was_clean);
-
-    client_events->stop_client();
-
-    // TODO This should go away when RCORE-2136 is done. The real sync client returns false from
-    // the close message handler which stops the websocket read loop which would prevent these
-    // extra events. But that's annoying to do in this testing context.
-    auto read_write_err = client_events->next_event();
-    close_call = client_events->next_event();
-    CHECK(read_write_err.type == WebSocketEvent::ReadError);
-    CHECK(close_call.type == WebSocketEvent::CloseFrame);
-    CHECK(close_call.close_code == WebSocketError::websocket_read_error);
-    CHECK_NOT(close_call.was_clean);
 }
 
 TEST(DefaultSocketProvider_ClientDisconnects)
