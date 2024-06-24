@@ -321,6 +321,27 @@ std::shared_ptr<Realm> successfully_async_open_realm(const Realm::Config& config
     return status.get_value();
 }
 
+std::pair<util::Future<SyncError>, std::function<void(std::shared_ptr<SyncSession>, SyncError)>> make_error_handler()
+{
+    auto [error_promise, error_future] = util::make_promise_future<SyncError>();
+    auto shared_promise = std::make_shared<decltype(error_promise)>(std::move(error_promise));
+    auto fn = [error_promise = std::move(shared_promise)](std::shared_ptr<SyncSession>, SyncError err) {
+        error_promise->emplace_value(std::move(err));
+    };
+    return std::make_pair(std::move(error_future), std::move(fn));
+}
+
+std::pair<util::Future<ClientResyncMode>, std::function<void(SharedRealm, ThreadSafeReference, bool)>>
+make_client_reset_handler()
+{
+    auto [reset_promise, reset_future] = util::make_promise_future<ClientResyncMode>();
+    auto shared_promise = std::make_shared<decltype(reset_promise)>(std::move(reset_promise));
+    auto fn = [reset_promise = std::move(shared_promise)](SharedRealm, ThreadSafeReference, bool did_recover) {
+        reset_promise->emplace_value(did_recover ? ClientResyncMode::Recover : ClientResyncMode::DiscardLocal);
+    };
+    return std::make_pair(std::move(reset_future), std::move(fn));
+}
+
 #endif // REALM_ENABLE_SYNC
 
 class TestHelper {
