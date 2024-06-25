@@ -271,7 +271,14 @@ public:
 
         ~Conn()
         {
-            close();
+            // If we haven't finished the TLS handshake, then the Conn has only lived
+            // on the event loop and we can tear it down here.
+            if (state.load() == Accepted) {
+                shutdown_websocket();
+            }
+            else {
+                close();
+            }
         }
 
         util::Future<void> send_binary_message(util::Span<char const> data)
@@ -344,6 +351,7 @@ public:
             return util::async_future_adapter<void, std::error_code>(
                        http_server, &HTTPServer<Conn>::async_send_response, *maybe_resp)
                 .then([self = util::bind_ptr(this)] {
+                    self->state.store(WebsocketHandshakeComplete);
                     self->websocket.initiate_server_websocket_after_handshake();
                 });
         }
@@ -373,10 +381,6 @@ public:
 
         void close()
         {
-            if (socket_is_closed.load()) {
-                return;
-            }
-
             do_synchronous_post<void>(service, [&] {
                 shutdown_websocket();
             });
@@ -390,12 +394,14 @@ public:
 
         void shutdown_websocket()
         {
-            if (socket_is_closed.exchange(true)) {
+            auto old_state = state.exchange(Closed);
+            if (old_state == Closed) {
                 return;
             }
-            logger->debug("Shutting down server-side socket");
-            websocket.stop();
-            if (tls_handshake_complete) {
+            if (old_state == WebsocketHandshakeComplete) {
+                websocket.stop();
+            }
+            if (old_state == TlsHandshakeComplete || old_state == WebsocketHandshakeComplete) {
                 std::error_code ec;
                 tls_stream.shutdown(ec);
                 if (ec) {
@@ -476,7 +482,7 @@ public:
         bool websocket_close_message_received(websocket::WebSocketError code, std::string_view message) override
         {
             events.add_event(WebSocketEvent::CloseFrame, std::string{message}, code);
-            return true;
+            return false;
         }
 
         bool websocket_ping_message_received(const char*, size_t) override
@@ -497,8 +503,8 @@ public:
         network::ReadAheadBuffer read_buffer;
         network::Socket socket;
         network::ssl::Stream tls_stream;
-        bool tls_handshake_complete = false;
-        std::atomic<bool> socket_is_closed{false};
+        enum State { Accepted, TlsHandshakeComplete, WebsocketHandshakeComplete, Closed };
+        std::atomic<State> state{Accepted};
         HTTPServer<Conn> http_server;
         websocket::Socket websocket;
 
@@ -524,12 +530,11 @@ public:
                        conn->tls_stream,
                        &network::ssl::Stream::async_handshake<util::UniqueFunction<void(std::error_code)>>)
                 .then([conn] {
-                    conn->tls_handshake_complete = true;
+                    conn->state.store(Conn::TlsHandshakeComplete);
                     return conn;
                 })
                 .on_error([conn](Status status) {
                     conn->logger->warn("Error accepting server connection: %1", status);
-                    conn->shutdown_websocket();
                     return StatusWith<util::bind_ptr<Conn>>(status);
                 });
         });
