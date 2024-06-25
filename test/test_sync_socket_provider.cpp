@@ -197,8 +197,19 @@ static std::unique_ptr<WrappedWebSocket> do_connect(DefaultSocketProvider& provi
 
 class TestWebSocketServer {
 public:
-    TestWebSocketServer(test_util::unit_test::TestContext& test_context, std::string tls_cert_path = "",
-                        std::string tls_key_path = "")
+    struct Config {
+        Config()
+            : use_ssl(true)
+        {
+            auto ca_dir = test_util::get_test_resource_path();
+            tls_cert_path = ca_dir + "localhost-chain.crt.pem";
+            tls_key_path = ca_dir + "localhost-server.key.pem";
+        }
+        std::string tls_cert_path;
+        std::string tls_key_path;
+        bool use_ssl{true};
+    };
+    TestWebSocketServer(test_util::unit_test::TestContext& test_context, Config&& config = {})
         : m_test_context(test_context)
         , m_logger(std::make_shared<util::PrefixLogger>("TestWebSocketServer ", m_test_context.logger))
         , m_acceptor(m_service)
@@ -206,16 +217,15 @@ public:
             m_service.run_until_stopped();
         })
     {
+#if REALM_MOBILE
+        config.use_ssl = false;
+#endif
         do_synchronous_post<void>(m_service, [&]() mutable {
-            auto ca_dir = test_util::get_test_resource_path();
-            if (tls_cert_path.empty()) {
-                tls_cert_path = ca_dir + "localhost-chain.crt.pem";
+            if (config.use_ssl) {
+                m_tls_context.emplace();
+                m_tls_context->use_certificate_chain_file(config.tls_cert_path);
+                m_tls_context->use_private_key_file(config.tls_key_path);
             }
-            if (tls_key_path.empty()) {
-                tls_key_path = ca_dir + "localhost-server.key.pem";
-            }
-            m_tls_context.use_certificate_chain_file(tls_cert_path);
-            m_tls_context.use_private_key_file(tls_key_path);
             m_acceptor.open(m_endpoint.protocol());
             m_acceptor.bind(m_endpoint);
             m_endpoint = m_acceptor.local_endpoint();
@@ -239,10 +249,12 @@ public:
         WebSocketEndpoint ep;
         ep.port = m_endpoint.port();
         ep.path = "/";
-        ep.is_ssl = true;
         ep.address = "localhost";
-        ep.ssl_trust_certificate_path = test_util::get_test_resource_path() + "crt.pem";
-        ep.verify_servers_ssl_certificate = true;
+        if (m_tls_context) {
+            ep.is_ssl = true;
+            ep.ssl_trust_certificate_path = test_util::get_test_resource_path() + "crt.pem";
+            ep.verify_servers_ssl_certificate = true;
+        }
         ep.protocols = {"RealmTestWebSocket#1"};
         return ep;
     }
@@ -256,17 +268,19 @@ public:
     }
 
     struct Conn : websocket::Config, util::AtomicRefCountBase {
-        Conn(network::Service& service, network::ssl::Context& tls_context,
+        Conn(network::Service& service, std::optional<network::ssl::Context>& tls_context,
              test_util::unit_test::TestContext& test_context)
             : random{test_util::produce_nondeterministic_random_seed()}
             , logger(test_context.logger)
             , service(service)
             , socket(service)
-            , tls_stream(socket, tls_context, network::ssl::Stream::server)
             , http_server(*this, logger)
             , websocket(*this)
         {
-            tls_stream.set_logger(logger.get());
+            if (tls_context) {
+                tls_stream.emplace(socket, *tls_context, network::ssl::Stream::server);
+                tls_stream->set_logger(logger.get());
+            }
         }
 
         ~Conn()
@@ -401,9 +415,9 @@ public:
             if (old_state == WebsocketHandshakeComplete) {
                 websocket.stop();
             }
-            if (old_state == TlsHandshakeComplete || old_state == WebsocketHandshakeComplete) {
+            if (tls_stream && (old_state == TlsHandshakeComplete || old_state == WebsocketHandshakeComplete)) {
                 std::error_code ec;
-                tls_stream.shutdown(ec);
+                tls_stream->shutdown(ec);
                 if (ec) {
                     logger->warn("Error shutting down tls stream on server side: %1", ec);
                 }
@@ -424,18 +438,26 @@ public:
 
         void async_write(const char* data, size_t size, WriteCompletionHandler handler) override
         {
-
-            tls_stream.async_write(data, size, std::move(handler));
+            if (tls_stream)
+                tls_stream->async_write(data, size, std::move(handler));
+            else
+                socket.async_write(data, size, std::move(handler));
         }
 
         void async_read(char* buffer, size_t size, ReadCompletionHandler handler) override
         {
-            tls_stream.async_read(buffer, size, read_buffer, std::move(handler));
+            if (tls_stream)
+                tls_stream->async_read(buffer, size, read_buffer, std::move(handler));
+            else
+                socket.async_read(buffer, size, read_buffer, std::move(handler));
         }
 
         void async_read_until(char* buffer, size_t size, char delim, ReadCompletionHandler handler) override
         {
-            tls_stream.async_read_until(buffer, size, delim, read_buffer, std::move(handler));
+            if (tls_stream)
+                tls_stream->async_read_until(buffer, size, delim, read_buffer, std::move(handler));
+            else
+                socket.async_read_until(buffer, size, delim, read_buffer, std::move(handler));
         }
 
         void websocket_handshake_completion_handler(const HTTPHeaders&) override
@@ -502,7 +524,7 @@ public:
 
         network::ReadAheadBuffer read_buffer;
         network::Socket socket;
-        network::ssl::Stream tls_stream;
+        std::optional<network::ssl::Stream> tls_stream;
         enum State { Accepted, TlsHandshakeComplete, WebsocketHandshakeComplete, Closed };
         std::atomic<State> state{Accepted};
         HTTPServer<Conn> http_server;
@@ -525,7 +547,10 @@ public:
                 promise.emplace_value(std::move(conn));
             });
         });
-        return std::move(pf.future).then([](util::bind_ptr<Conn> conn) {
+        return std::move(pf.future).then([this](util::bind_ptr<Conn> conn) {
+            if (!m_tls_context) {
+                return util::Future<util::bind_ptr<Conn>>(conn);
+            }
             return util::async_future_adapter<void, std::error_code>(
                        conn->tls_stream,
                        &network::ssl::Stream::async_handshake<util::UniqueFunction<void(std::error_code)>>)
@@ -546,7 +571,7 @@ private:
     network::Service m_service;
     network::Acceptor m_acceptor;
     network::Endpoint m_endpoint;
-    network::ssl::Context m_tls_context;
+    std::optional<network::ssl::Context> m_tls_context;
     std::thread m_server_thread;
 };
 
@@ -638,10 +663,14 @@ TEST(DefaultSocketProvider_ClientDisconnects)
     CHECK(read_write_err.type == WebSocketEvent::ReadError);
 }
 
+#if !REALM_MOBILE
 TEST(DefaultSocketProvider_BadTLSCertificate)
 {
     auto ca_path = test_util::get_test_resource_path();
-    TestWebSocketServer server(test_context, ca_path + "dns-chain.crt.pem", ca_path + "dns-checked-server.key.pem");
+    TestWebSocketServer::Config server_config;
+    server_config.tls_cert_path = ca_path + "dns-chain.crt.pem";
+    server_config.tls_key_path = ca_path + "dns_checked_server.key.pem";
+    TestWebSocketServer server(test_context, std::move(server_config));
     DefaultSocketProvider client_provider(test_context.logger, "DefaultSocketProvider");
 
     auto&& [observer, client_events] = WebSocketEventQueueObserver::make_observer_and_queue();
@@ -660,6 +689,7 @@ TEST(DefaultSocketProvider_BadTLSCertificate)
     CHECK(tls_error_event.close_code == WebSocketError::websocket_tls_handshake_failed);
     CHECK_NOT(tls_error_event.was_clean);
 }
+#endif
 
 TEST(DefaultSocketProvider_WebsocketRequestFailures)
 {
