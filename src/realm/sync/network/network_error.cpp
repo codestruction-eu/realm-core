@@ -20,6 +20,7 @@
 
 #include "realm/util/basic_system_errors.hpp"
 #include "realm/util/misc_ext_errors.hpp"
+#include "realm/sync/network/network_ssl.hpp"
 
 namespace realm::sync::network {
 
@@ -30,6 +31,9 @@ Status get_status_from_network_error(std::error_code ec)
     }
     if (ec == make_error_code(util::MiscExtErrors::end_of_input)) {
         return {ErrorCodes::ConnectionClosed, ec.message()};
+    }
+    if (ec == ssl::Errors::tls_handshake_failed) {
+        return {ErrorCodes::TlsHandshakeFailed, ec.message()};
     }
     switch (ec.value()) {
         case util::error::operation_aborted:

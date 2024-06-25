@@ -649,7 +649,9 @@ TEST(DefaultSocketProvider_BadTLSCertificate)
     auto client = do_connect(client_provider, std::move(observer), server.endpoint());
 
     auto sw_server_conn = server_conn_fut.get_no_throw();
-    CHECK(sw_server_conn == ErrorCodes::ConnectionClosed);
+    // On apple platforms this gets reported as an end_of_input error, but on openssl
+    // platforms it gets represented as a tls handshake failure.
+    CHECK(sw_server_conn == ErrorCodes::ConnectionClosed || sw_server_conn == ErrorCodes::TlsHandshakeFailed);
 
     auto read_error_event = client_events->next_event();
     CHECK(read_error_event.type == WebSocketEvent::ReadError);
