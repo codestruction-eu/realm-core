@@ -28,8 +28,6 @@ struct WebSocketEvent {
     enum Type {
         ReadError,
         WriteError,
-        HandshakeIgnored,
-        HandshakeError,
         ProtocolError,
         HandshakeComplete,
         BinaryMessage,
@@ -206,7 +204,8 @@ static std::unique_ptr<WrappedWebSocket> do_connect(DefaultSocketProvider& provi
 
 class TestWebSocketServer {
 public:
-    TestWebSocketServer(test_util::unit_test::TestContext& test_context)
+    TestWebSocketServer(test_util::unit_test::TestContext& test_context, std::string tls_cert_path = "",
+                        std::string tls_key_path = "")
         : m_test_context(test_context)
         , m_logger(std::make_shared<util::PrefixLogger>("TestWebSocketServer ", m_test_context.logger))
         , m_acceptor(m_service)
@@ -214,11 +213,16 @@ public:
             m_service.run_until_stopped();
         })
     {
-        do_synchronous_post<void>(m_service, [this]() mutable {
+        do_synchronous_post<void>(m_service, [&]() mutable {
             auto ca_dir = test_util::get_test_resource_path();
-            m_tls_context.use_certificate_chain_file(ca_dir +
-                                                     "localhost-chain.crt.pem");
-            m_tls_context.use_private_key_file(ca_dir + "localhost-server.key.pem");
+            if (tls_cert_path.empty()) {
+                tls_cert_path = ca_dir + "localhost-chain.crt.pem";
+            }
+            if (tls_key_path.empty()) {
+                tls_key_path = ca_dir + "localhost-server.key.pem";
+            }
+            m_tls_context.use_certificate_chain_file(tls_cert_path);
+            m_tls_context.use_private_key_file(tls_key_path);
             m_acceptor.open(m_endpoint.protocol());
             m_acceptor.bind(m_endpoint);
             m_endpoint = m_acceptor.local_endpoint();
@@ -313,8 +317,19 @@ public:
                 service, http_server, &decltype(http_server)::async_receive_request);
         }
 
-        util::Future<void> complete_server_handshake(HTTPRequest&& req)
+        util::Future<void> complete_server_handshake(HTTPRequest&& req,
+                                                     std::optional<HTTPResponse> maybe_resp = std::nullopt)
         {
+            if (maybe_resp) {
+                auto& resp = *maybe_resp;
+                resp.headers["Connection"] = "close";
+                if (resp.body) {
+                    resp.headers["Content-Length"] = util::to_string(resp.body->size());
+                }
+                return util::async_future_adapter<void, std::error_code>(
+                    http_server, &HTTPServer<Conn>::async_send_response, std::move(resp));
+            }
+
             auto protocol_it = req.headers.find("Sec-WebSocket-Protocol");
             REALM_ASSERT(protocol_it != req.headers.end());
             auto protocols = protocol_it->second;
@@ -328,9 +343,10 @@ public:
                 protocol = protocols.substr(0, first_comma);
             }
             std::error_code ec;
-            auto maybe_resp = websocket::make_http_response(req, protocol, ec);
+            maybe_resp = websocket::make_http_response(req, protocol, ec);
             REALM_ASSERT(maybe_resp);
             REALM_ASSERT(!ec);
+
 
             return util::async_future_adapter<void, std::error_code>(
                        http_server, &HTTPServer<Conn>::async_send_response, *maybe_resp)
@@ -342,14 +358,16 @@ public:
         void do_server_handshake()
         {
             initiate_server_handshake()
-                .then([self = util::bind_ptr(this)](HTTPRequest&& req) {
-                    return self->complete_server_handshake(std::move(req));
+                .then([this](HTTPRequest&& req) {
+                    return complete_server_handshake(std::move(req));
                 })
                 .get_async([self = util::bind_ptr(this)](Status status) {
                     if (status.is_ok()) {
+                        self->logger->debug("handshake complete on server side");
                         self->events.add_event(WebSocketEvent::HandshakeComplete);
                     }
                     else {
+                        self->logger->debug("handshake error: %1", status);
                         self->events.add_event(WebSocketEvent::ReadError);
                     }
                 });
@@ -362,7 +380,11 @@ public:
 
         void close()
         {
-            do_synchronous_post<void>(service, [this] {
+            if (socket_is_closed) {
+                return;
+            }
+
+            do_synchronous_post<void>(service, [&] {
                 shutdown_websocket();
             });
         }
@@ -375,13 +397,20 @@ public:
 
         void shutdown_websocket()
         {
+            if (socket_is_closed) {
+                return;
+            }
+            logger->debug("Shutting down server-side socket");
             websocket.stop();
-            std::error_code ec;
-            tls_stream.shutdown(ec);
-            if (ec) {
-                logger->warn("Error shutting down tls stream: %1", ec);
+            if (tls_handshake_complete) {
+                std::error_code ec;
+                tls_stream.shutdown(ec);
+                if (ec) {
+                    logger->warn("Error shutting down tls stream on server side: %1", ec);
+                }
             }
             socket.close();
+            socket_is_closed = true;
         }
 
         // Implement the websocket::Config interface
@@ -432,8 +461,7 @@ public:
 
         void websocket_handshake_error_handler(std::error_code, const HTTPHeaders*, std::string_view) override
         {
-            events.add_event(WebSocketEvent::HandshakeError);
-            shutdown_websocket();
+            REALM_UNREACHABLE();
         }
 
         void websocket_protocol_error_handler(std::error_code) override
@@ -477,6 +505,8 @@ public:
         network::ReadAheadBuffer read_buffer;
         network::Socket socket;
         network::ssl::Stream tls_stream;
+        bool tls_handshake_complete = false;
+        bool socket_is_closed = false;
         HTTPServer<Conn> http_server;
         websocket::Socket websocket;
 
@@ -502,7 +532,13 @@ public:
                        conn->tls_stream,
                        &network::ssl::Stream::async_handshake<util::UniqueFunction<void(std::error_code)>>)
                 .then([conn] {
+                    conn->tls_handshake_complete = true;
                     return conn;
+                })
+                .on_error([conn](Status status) {
+                    conn->logger->warn("Error accepting server connection: %1", status);
+                    conn->shutdown_websocket();
+                    return StatusWith<util::bind_ptr<Conn>>(status);
                 });
         });
     }
@@ -603,4 +639,115 @@ TEST(DefaultSocketProvider_ClientDisconnects)
 
     auto read_write_err = server_conn->next_event();
     CHECK(read_write_err.type == WebSocketEvent::ReadError);
+}
+
+TEST(DefaultSocketProvider_BadTLSCertificate)
+{
+    auto ca_path = test_util::get_test_resource_path();
+    TestWebSocketServer server(test_context, ca_path + "dns-chain.crt.pem", ca_path + "dns-checked-server.key.pem");
+    DefaultSocketProvider client_provider(test_context.logger, "DefaultSocketProvider");
+
+    auto&& [observer, client_events] = WebSocketEventQueueObserver::make_observer_and_queue();
+    auto server_conn_fut = server.accept_connection();
+    auto client = do_connect(client_provider, std::move(observer), server.endpoint());
+
+    auto sw_server_conn = server_conn_fut.get_no_throw();
+    CHECK(sw_server_conn == ErrorCodes::ConnectionClosed);
+
+    auto read_error_event = client_events->next_event();
+    CHECK(read_error_event.type == WebSocketEvent::ReadError);
+    auto tls_error_event = client_events->next_event();
+    CHECK(tls_error_event.type == WebSocketEvent::CloseFrame);
+    CHECK(tls_error_event.close_code == WebSocketError::websocket_tls_handshake_failed);
+    CHECK_NOT(tls_error_event.was_clean);
+}
+
+TEST(DefaultSocketProvider_WebsocketRequestFailures)
+{
+    TestWebSocketServer server(test_context);
+    DefaultSocketProvider client_provider(test_context.logger, "DefaultSocketProvider");
+
+    auto make_resp = [](HTTPStatus status, std::string body) {
+        HTTPResponse resp;
+        resp.status = status;
+        resp.reason = util::to_string(status);
+        resp.body = std::move(body);
+        return resp;
+    };
+
+    {
+        auto&& [observer, client_events] = WebSocketEventQueueObserver::make_observer_and_queue();
+        auto server_conn_fut = server.accept_connection();
+        auto client = do_connect(client_provider, std::move(observer), server.endpoint());
+
+        auto server_conn = server_conn_fut.get();
+        server_conn->initiate_server_handshake()
+            .then([server_conn, make_resp](HTTPRequest&& req) {
+                return server_conn->complete_server_handshake(
+                    std::move(req), make_resp(HTTPStatus::BadRequest, "REALM_SYNC_PROTOCOL_MISMATCH"));
+            })
+            .get();
+        auto handshake_error_event = client_events->next_event();
+        CHECK(handshake_error_event.type == WebSocketEvent::CloseFrame);
+        CHECK(handshake_error_event.close_code == WebSocketError::websocket_protocol_mismatch);
+        CHECK(handshake_error_event.was_clean);
+    }
+
+    {
+        auto&& [observer, client_events] = WebSocketEventQueueObserver::make_observer_and_queue();
+        auto server_conn_fut = server.accept_connection();
+        auto client = do_connect(client_provider, std::move(observer), server.endpoint());
+
+        auto server_conn = server_conn_fut.get();
+        server_conn->initiate_server_handshake()
+            .then([server_conn, make_resp](HTTPRequest&& req) {
+                return server_conn->complete_server_handshake(
+                    std::move(req), make_resp(HTTPStatus::BadRequest, "REALM_SYNC_PROTOCOL_MISMATCH:CLIENT_TOO_OLD"));
+            })
+            .get();
+        auto handshake_error_event = client_events->next_event();
+        CHECK(handshake_error_event.type == WebSocketEvent::CloseFrame);
+        CHECK(handshake_error_event.close_code == WebSocketError::websocket_client_too_old);
+        CHECK(handshake_error_event.was_clean);
+    }
+
+    {
+        auto&& [observer, client_events] = WebSocketEventQueueObserver::make_observer_and_queue();
+        auto server_conn_fut = server.accept_connection();
+        auto client = do_connect(client_provider, std::move(observer), server.endpoint());
+
+        auto server_conn = server_conn_fut.get();
+        server_conn->initiate_server_handshake()
+            .then([server_conn, make_resp](HTTPRequest&& req) {
+                return server_conn->complete_server_handshake(
+                    std::move(req), make_resp(HTTPStatus::BadRequest, "REALM_SYNC_PROTOCOL_MISMATCH:CLIENT_TOO_NEW"));
+            })
+            .get();
+        auto handshake_error_event = client_events->next_event();
+        CHECK(handshake_error_event.type == WebSocketEvent::CloseFrame);
+        CHECK(handshake_error_event.close_code == WebSocketError::websocket_client_too_new);
+        CHECK(handshake_error_event.was_clean);
+    }
+
+    {
+        auto&& [observer, client_events] = WebSocketEventQueueObserver::make_observer_and_queue();
+        auto server_conn_fut = server.accept_connection();
+        auto client = do_connect(client_provider, std::move(observer), server.endpoint());
+
+        auto server_conn = server_conn_fut.get();
+        server_conn->initiate_server_handshake()
+            .then([server_conn](HTTPRequest&& req) {
+                HTTPResponse resp;
+                resp.status = HTTPStatus::MovedPermanently;
+                resp.reason = util::to_string(resp.status);
+                resp.headers["Location"] = "http://example.com";
+
+                return server_conn->complete_server_handshake(std::move(req), std::move(resp));
+            })
+            .get();
+        auto handshake_error_event = client_events->next_event();
+        CHECK(handshake_error_event.type == WebSocketEvent::CloseFrame);
+        CHECK(handshake_error_event.close_code == WebSocketError::websocket_moved_permanently);
+        CHECK(handshake_error_event.was_clean);
+    }
 }
