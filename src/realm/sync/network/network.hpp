@@ -1371,7 +1371,13 @@ private:
     char* m_begin = nullptr;
     char* m_end = nullptr;
     static constexpr std::size_t s_size = 1024;
-    const std::unique_ptr<char[]> m_buffer;
+    struct CallocDeleter {
+        void operator()(void* ptr)
+        {
+            std::free(ptr);
+        }
+    };
+    const std::unique_ptr<char[], CallocDeleter> m_buffer;
 
     bool empty() const noexcept;
     bool read(char*& begin, char* end, int delim, std::error_code&) noexcept;
@@ -3542,7 +3548,7 @@ inline void DeadlineTimer::async_wait(std::chrono::duration<R, P> delay, H&& han
 // ---------------- ReadAheadBuffer ----------------
 
 inline ReadAheadBuffer::ReadAheadBuffer()
-    : m_buffer{new char[s_size]} // Throws
+    : m_buffer{static_cast<char*>(std::calloc(s_size, 1))} // Throws
 {
 }
 
