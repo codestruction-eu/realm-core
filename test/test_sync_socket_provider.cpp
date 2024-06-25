@@ -669,7 +669,7 @@ TEST(DefaultSocketProvider_BadTLSCertificate)
     auto ca_path = test_util::get_test_resource_path();
     TestWebSocketServer::Config server_config;
     server_config.tls_cert_path = ca_path + "dns-chain.crt.pem";
-    server_config.tls_key_path = ca_path + "dns_checked_server.key.pem";
+    server_config.tls_key_path = ca_path + "dns-checked-server.key.pem";
     TestWebSocketServer server(test_context, std::move(server_config));
     DefaultSocketProvider client_provider(test_context.logger, "DefaultSocketProvider");
 
