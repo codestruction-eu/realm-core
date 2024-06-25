@@ -25,14 +25,7 @@ Status status_from_error<std::error_code>(std::error_code ec)
 } // namespace realm::util
 
 struct WebSocketEvent {
-    enum Type {
-        ReadError,
-        WriteError,
-        ProtocolError,
-        HandshakeComplete,
-        BinaryMessage,
-        CloseFrame
-    } type;
+    enum Type { ReadError, WriteError, ProtocolError, HandshakeComplete, BinaryMessage, CloseFrame } type;
     std::string payload;
     WebSocketError close_code = WebSocketError::websocket_ok;
     bool was_clean = true;
@@ -380,7 +373,7 @@ public:
 
         void close()
         {
-            if (socket_is_closed) {
+            if (socket_is_closed.load()) {
                 return;
             }
 
@@ -397,7 +390,7 @@ public:
 
         void shutdown_websocket()
         {
-            if (socket_is_closed) {
+            if (socket_is_closed.exchange(true)) {
                 return;
             }
             logger->debug("Shutting down server-side socket");
@@ -410,7 +403,6 @@ public:
                 }
             }
             socket.close();
-            socket_is_closed = true;
         }
 
         // Implement the websocket::Config interface
@@ -506,7 +498,7 @@ public:
         network::Socket socket;
         network::ssl::Stream tls_stream;
         bool tls_handshake_complete = false;
-        bool socket_is_closed = false;
+        std::atomic<bool> socket_is_closed{false};
         HTTPServer<Conn> http_server;
         websocket::Socket websocket;
 
