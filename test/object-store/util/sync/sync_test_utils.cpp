@@ -331,17 +331,6 @@ std::pair<util::Future<SyncError>, std::function<void(std::shared_ptr<SyncSessio
     return std::make_pair(std::move(error_future), std::move(fn));
 }
 
-std::pair<util::Future<ClientResyncMode>, std::function<void(SharedRealm, ThreadSafeReference, bool)>>
-make_client_reset_handler()
-{
-    auto [reset_promise, reset_future] = util::make_promise_future<ClientResyncMode>();
-    auto shared_promise = std::make_shared<decltype(reset_promise)>(std::move(reset_promise));
-    auto fn = [reset_promise = std::move(shared_promise)](SharedRealm, ThreadSafeReference, bool did_recover) {
-        reset_promise->emplace_value(did_recover ? ClientResyncMode::Recover : ClientResyncMode::DiscardLocal);
-    };
-    return std::make_pair(std::move(reset_future), std::move(fn));
-}
-
 #endif // REALM_ENABLE_SYNC
 
 class TestHelper {
@@ -540,6 +529,17 @@ void wait_for_num_objects_in_atlas(std::shared_ptr<app::User> user, const AppSes
             return pf.future.get() >= expected_size;
         },
         std::chrono::minutes(15), std::chrono::milliseconds(500));
+}
+
+std::pair<util::Future<ClientResyncMode>, std::function<void(SharedRealm, ThreadSafeReference, bool)>>
+make_client_reset_handler()
+{
+    auto [reset_promise, reset_future] = util::make_promise_future<ClientResyncMode>();
+    auto shared_promise = std::make_shared<decltype(reset_promise)>(std::move(reset_promise));
+    auto fn = [reset_promise = std::move(shared_promise)](SharedRealm, ThreadSafeReference, bool did_recover) {
+        reset_promise->emplace_value(did_recover ? ClientResyncMode::Recover : ClientResyncMode::DiscardLocal);
+    };
+    return std::make_pair(std::move(reset_future), std::move(fn));
 }
 
 void trigger_client_reset(const AppSession& app_session, const SyncSession& sync_session)

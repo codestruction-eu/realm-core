@@ -168,8 +168,6 @@ StatusWith<std::shared_ptr<Realm>> async_open_realm(const Realm::Config& config)
 std::shared_ptr<Realm> successfully_async_open_realm(const Realm::Config& config);
 
 std::pair<util::Future<SyncError>, std::function<void(std::shared_ptr<SyncSession>, SyncError)>> make_error_handler();
-std::pair<util::Future<ClientResyncMode>, std::function<void(SharedRealm, ThreadSafeReference, bool)>>
-make_client_reset_handler();
 
 app::Response do_http_request(const app::Request& request);
 
@@ -361,8 +359,12 @@ void wait_for_object_to_persist_to_atlas(std::shared_ptr<app::User> user, const 
 void wait_for_num_objects_in_atlas(std::shared_ptr<app::User> user, const AppSession& app_session,
                                    const std::string& schema_name, size_t expected_size);
 
+std::pair<util::Future<ClientResyncMode>, std::function<void(SharedRealm, ThreadSafeReference, bool)>>
+make_client_reset_handler();
+
 void trigger_client_reset(const AppSession& app_session, const SyncSession& sync_session);
 void trigger_client_reset(const AppSession& app_session, const SharedRealm& realm);
+
 #endif // REALM_ENABLE_AUTH_TESTS
 
 #endif // REALM_ENABLE_SYNC
