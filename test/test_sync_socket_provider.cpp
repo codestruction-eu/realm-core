@@ -253,8 +253,6 @@ public:
             ep.is_ssl = true;
             ep.ssl_trust_certificate_path = test_util::get_test_resource_path() + "crt.pem";
             ep.verify_servers_ssl_certificate = true;
-        } else {
-            ep.is_ssl = false;
         }
         ep.protocols = {"RealmTestWebSocket#1"};
         return ep;
@@ -332,23 +330,31 @@ public:
                                                                       &decltype(http_server)::async_receive_request);
         }
 
-        util::Future<void> complete_server_handshake(HTTPRequest&& req,
-                                                     std::optional<HTTPResponse> maybe_resp = std::nullopt)
+        util::Future<void> send_http_response(HTTPResponse&& resp)
         {
-            if (maybe_resp) {
-                auto& resp = *maybe_resp;
+            if (resp.status != HTTPStatus::SwitchingProtocols && resp.status != HTTPStatus::Ok) {
                 resp.headers["Connection"] = "close";
-                if (resp.body) {
-                    resp.headers["Content-Length"] = util::to_string(resp.body->size());
-                }
-                return async_future_adapter<void, std::error_code>(
-                           http_server, &HTTPServer<Conn>::async_send_response, std::move(resp))
-                    .on_completion([this](Status status) {
-                        shutdown_websocket();
-                        return status;
-                    });
             }
+            if (resp.body) {
+                resp.headers["Content-Length"] = util::to_string(resp.body->size());
+            }
+            // You can't capture an HTTPResponse in a lambda that will be the callback for service.post()
+            // because the std::map that contains the headers is not std::is_nothrow_move_constructible_v.
+            // So we wrap it in a unique_ptr here.
+            // auto unique_resp = std::make_unique<HTTPResponse>(std::move(resp));
+            auto pf = util::make_promise_future();
+            service.post([this, promise = std::move(pf.promise), resp = std::move(resp)](Status status) mutable {
+                if (!status.is_ok()) {
+                    promise.set_error(status);
+                }
+                promise.set_from(util::async_future_adapter<void, std::error_code>(
+                    http_server, &HTTPServer<Conn>::async_send_response, std::move(resp)));
+            });
+            return std::move(pf.future);
+        }
 
+        util::Future<void> complete_server_handshake(HTTPRequest&& req)
+        {
             auto protocol_it = req.headers.find("Sec-WebSocket-Protocol");
             REALM_ASSERT(protocol_it != req.headers.end());
             auto protocols = protocol_it->second;
@@ -362,16 +368,14 @@ public:
                 protocol = protocols.substr(0, first_comma);
             }
             std::error_code ec;
-            maybe_resp = websocket::make_http_response(req, protocol, ec);
+            auto maybe_resp = websocket::make_http_response(req, protocol, ec);
             REALM_ASSERT(maybe_resp);
             REALM_ASSERT(!ec);
 
-            return async_future_adapter<void, std::error_code>(http_server, &HTTPServer<Conn>::async_send_response,
-                                                               *maybe_resp)
-                .then([self = util::bind_ptr(this)] {
-                    self->state.store(WebsocketHandshakeComplete);
-                    self->websocket.initiate_server_websocket_after_handshake();
-                });
+            return send_http_response(std::move(*maybe_resp)).then([this] {
+                state.store(WebsocketHandshakeComplete);
+                websocket.initiate_server_websocket_after_handshake();
+            });
         }
 
         void do_server_handshake()
@@ -428,6 +432,7 @@ public:
             }
             socket.close();
         }
+
 
         template <typename T, typename Error, typename OperObj, typename AsyncFn, typename... Args>
         util::Future<T> async_future_adapter(OperObj& obj, AsyncFn&& fn_ptr, Args&&... args)
@@ -730,13 +735,13 @@ TEST(DefaultSocketProvider_WebsocketRequestFailures)
 
         auto server_conn = server_conn_fut.get();
         server_conn->initiate_server_handshake()
-            .then([server_conn](HTTPRequest&& req) {
+            .then([server_conn](HTTPRequest&&) {
                 HTTPResponse resp;
                 resp.status = HTTPStatus::MovedPermanently;
                 resp.reason = util::to_string(resp.status);
                 resp.headers["Location"] = "http://example.com";
 
-                return server_conn->complete_server_handshake(std::move(req), std::move(resp));
+                return server_conn->send_http_response(std::move(resp));
             })
             .get();
         auto handshake_error_event = client_events->next_event();
@@ -752,8 +757,8 @@ TEST(DefaultSocketProvider_WebsocketRequestFailures)
 
         auto server_conn = server_conn_fut.get();
         server_conn->initiate_server_handshake()
-            .then([server_conn, &make_resp](HTTPRequest&& req) {
-                return server_conn->complete_server_handshake(std::move(req), make_resp(HTTPStatus::Unauthorized));
+            .then([server_conn, &make_resp](HTTPRequest&&) {
+                return server_conn->send_http_response(make_resp(HTTPStatus::Unauthorized));
             })
             .get();
         auto handshake_error_event = client_events->next_event();
@@ -769,8 +774,8 @@ TEST(DefaultSocketProvider_WebsocketRequestFailures)
 
         auto server_conn = server_conn_fut.get();
         server_conn->initiate_server_handshake()
-            .then([server_conn, &make_resp](HTTPRequest&& req) {
-                return server_conn->complete_server_handshake(std::move(req), make_resp(HTTPStatus::Forbidden));
+            .then([server_conn, &make_resp](HTTPRequest&&) {
+                return server_conn->send_http_response(make_resp(HTTPStatus::Forbidden));
             })
             .get();
         auto handshake_error_event = client_events->next_event();
