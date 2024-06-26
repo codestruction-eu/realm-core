@@ -253,6 +253,8 @@ public:
             ep.is_ssl = true;
             ep.ssl_trust_certificate_path = test_util::get_test_resource_path() + "crt.pem";
             ep.verify_servers_ssl_certificate = true;
+        } else {
+            ep.is_ssl = false;
         }
         ep.protocols = {"RealmTestWebSocket#1"};
         return ep;
@@ -363,7 +365,6 @@ public:
             maybe_resp = websocket::make_http_response(req, protocol, ec);
             REALM_ASSERT(maybe_resp);
             REALM_ASSERT(!ec);
-
 
             return async_future_adapter<void, std::error_code>(http_server, &HTTPServer<Conn>::async_send_response,
                                                                *maybe_resp)
@@ -553,18 +554,7 @@ public:
     util::Future<util::bind_ptr<Conn>> accept_connection()
     {
         auto pf = util::make_promise_future<util::bind_ptr<Conn>>();
-        post([this, promise = std::move(pf.promise)]() mutable {
-            auto conn = util::make_bind<Conn>(++m_conn_count, m_service, m_tls_context, m_test_context);
-            m_acceptor.async_accept(conn->socket, [conn, promise = std::move(promise)](std::error_code ec) mutable {
-                if (ec) {
-                    promise.set_error(network::get_status_from_network_error(ec));
-                    return;
-                }
-
-                promise.emplace_value(std::move(conn));
-            });
-        });
-        return std::move(pf.future).then([this](util::bind_ptr<Conn> conn) {
+        auto fut_return = std::move(pf.future).then([this](util::bind_ptr<Conn> conn) {
             if (!m_tls_context) {
                 return util::Future<util::bind_ptr<Conn>>(conn);
             }
@@ -580,6 +570,18 @@ public:
                     return StatusWith<util::bind_ptr<Conn>>(status);
                 });
         });
+        post([this, promise = std::move(pf.promise)]() mutable {
+            auto conn = util::make_bind<Conn>(++m_conn_count, m_service, m_tls_context, m_test_context);
+            m_acceptor.async_accept(conn->socket, [conn, promise = std::move(promise)](std::error_code ec) mutable {
+                if (ec) {
+                    promise.set_error(network::get_status_from_network_error(ec));
+                    return;
+                }
+
+                promise.emplace_value(std::move(conn));
+            });
+        });
+        return fut_return;
     }
 
 private:
