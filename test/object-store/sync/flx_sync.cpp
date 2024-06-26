@@ -255,6 +255,16 @@ TEST_CASE("flx: test commands work", "[sync][flx][test command][baas]") {
     });
 }
 
+static auto make_error_handler()
+{
+    auto [error_promise, error_future] = util::make_promise_future<SyncError>();
+    auto shared_promise = std::make_shared<decltype(error_promise)>(std::move(error_promise));
+    auto fn = [error_promise = std::move(shared_promise)](std::shared_ptr<SyncSession>, SyncError err) {
+        error_promise->emplace_value(std::move(err));
+    };
+    return std::make_pair(std::move(error_future), std::move(fn));
+}
+
 TEST_CASE("app: error handling integration test", "[sync][flx][baas]") {
     static std::optional<FLXSyncTestHarness> harness{"error_handling"};
     create_user_and_log_in(harness->app());

@@ -167,8 +167,6 @@ void wait_for_advance(Realm& realm);
 StatusWith<std::shared_ptr<Realm>> async_open_realm(const Realm::Config& config);
 std::shared_ptr<Realm> successfully_async_open_realm(const Realm::Config& config);
 
-std::pair<util::Future<SyncError>, std::function<void(std::shared_ptr<SyncSession>, SyncError)>> make_error_handler();
-
 app::Response do_http_request(const app::Request& request);
 
 class SynchronousTestTransport : public app::GenericNetworkTransport {
