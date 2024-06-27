@@ -1094,13 +1094,14 @@ TEST_CASE("flx: role changes during client resets complete successfully",
             logger->debug("ROLE CHANGE: Role change after client reset session integrating");
             set_expected_role_state(ClientResetTestState::cr_session_integrating);
         }
-        SECTION("Client reset session integrated") {
-            logger->debug("ROLE CHANGE: Role change after client reset session integrated");
-            set_expected_role_state(ClientResetTestState::cr_session_integrated);
-        }
-        /// TODO: Uncomment these lines once the server is able to support role changes for
-        ///       sessions that have an unacknowledged client reset.
-        ///       e.g. during BIND/MERGE/IDENT of primary session after fresh realm downloaded
+        /// TODO: These tests are disabled since the role change boostraps are not working when
+        ///       the original session restarts to merge the fresh realm with the local realm.
+        ///       Uncomment these tests once https://github.com/realm/realm-core/issues/7846
+        ///       has been fixed.
+        // SECTION("Client reset session integrated") {
+        //     logger->debug("ROLE CHANGE: Role change after client reset session integrated");
+        //     set_expected_role_state(ClientResetTestState::cr_session_integrated);
+        // }
         // SECTION("BIND after client reset session") {
         //     logger->debug("ROLE CHANGE: Role change after BIND after client reset session");
         //     set_expected_role_state(ClientResetTestState::bind_after_cr_session, true);
